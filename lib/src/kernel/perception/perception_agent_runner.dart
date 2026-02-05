@@ -86,6 +86,7 @@ class PerceptionAgentRunner {
           context: context,
           kernel: kernel,
           onFirstToken: callContext.markFirstToken,
+          onMessageCallback: (message) => _recordTokenUsage(message, callContext),
           logger: logger,
         );
         await LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey)
@@ -192,16 +193,30 @@ class _PerceptionContext {
   });
 }
 
+void _recordTokenUsage(AgentMessage message, LlmCallContext context) {
+  final usage = message.completions?.usage;
+  if (usage == null) {
+    return;
+  }
+  context.setTotalTokens(usage.totalTokens);
+  final contextUsageRatio = usage.contextUsageRatio;
+  if (contextUsageRatio != null) {
+    context.setContextUsageRatio(contextUsageRatio.toDouble());
+  }
+}
+
 class _PerceptionAgentHandler extends AgentMessageHandler {
   final _PerceptionContext context;
   final Kernel kernel;
   final void Function() onFirstToken;
+  final void Function(AgentMessage message) onMessageCallback;
   final KernelLogger? logger;
 
   _PerceptionAgentHandler({
     required this.context,
     required this.kernel,
     required this.onFirstToken,
+    required this.onMessageCallback,
     this.logger,
   });
 
@@ -262,6 +277,7 @@ class _PerceptionAgentHandler extends AgentMessageHandler {
   @override
   Future<void> onMessage(String sessionId, AgentMessage agentMessage) async {
     onFirstToken();
+    onMessageCallback(agentMessage);
   }
 
   @override

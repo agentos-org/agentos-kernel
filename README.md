@@ -24,6 +24,9 @@ Create:
   - Builds the full kernel with LiteAgent perception/planning/learning, OpenTool execution,
     Drift memory (SQLite3), Hive job manager, and Hive preference store with LiteEmbeddings
     vector store.
+  - If `llm` is null or `llm.models` is empty, the kernel starts without LLM support. LLM-dependent
+    operations (perception/planning/learning/summarization) throw `StateError`.
+  - If embeddings cannot be configured, the vector store throws `StateError` when used.
 
 Runtime (Intent Flow):
 - `submitRaw({source, content, data})` → `JobHandle`
@@ -53,11 +56,16 @@ Tools (Planning/Execution):
 
 Model Configuration:
 - `updateLlmModels(List<KernelLlmModel>)`
-  - Replace the LLM model list.
+  - Replace the LLM model list (and enable LLM components if they were not configured).
 
 Read-only Info:
 - `getModelHealth()` → `Map<String, ModelHealthSnapshot>`
   - Read model availability (only when AdaptiveSupervision is enabled).
+- `getExternalServiceHealth()` → `ExternalServiceHealthSnapshot`
+  - Read LiteAgent/OpenTool/LLM health snapshots.
+- `onExternalServiceHealthChange((ExternalServiceHealth) onChange)`
+  - Subscribe to external service health updates. Call `cancel()` on the returned
+    subscription to stop listening.
 - `getMemorySnapshot({scope, limit})` → `MemorySnapshot`
   - Read memory snapshot for a scope (recent records only).
 - `getPreferenceSnapshot()` → `PreferenceSnapshot`
@@ -68,9 +76,22 @@ Read-only Info:
 
 ## LLM routing
 
-`KernelServiceConfig` accepts a list of LLM models.
+`KernelServiceConfig` accepts a list of LLM models (or `null` to disable LLM).
 The runtime resolver picks the first available model (based on supervision health),
 so if the preferred model is unhealthy it falls back to the next model.
+If no LLM models are provided, LLM-dependent operations throw `StateError`
+until `updateLlmModels` is called.
+
+## External service health
+
+Adaptive supervision polls external services:
+- LiteAgent `/version` (via SDK) every 10s
+- OpenTool Daemon `/version` (via SDK) every 10s
+- LLM `/health` (baseUrl + `/health`) every 10s after `updateLlmModels`
+- LiteEmbeddings `/version` (via SDK) every 10s
+
+Use `getExternalServiceHealth()` for a snapshot and
+`onExternalServiceHealthChange(...)` for updates.
 
 ## Modules
 
@@ -120,6 +141,7 @@ final service = await KernelService.create(
           paramsB: 32,
           quantization: '<LLM_QUANTIZATION>',
           sizeGB: 19.9,
+          contextWindowSize: 32768, // optional
         ),
         KernelLlmModel(
           baseUrl: '<LLM_BASE_URL_2>',
@@ -130,6 +152,7 @@ final service = await KernelService.create(
           paramsB: 14,
           quantization: '<LLM_QUANTIZATION_2>',
           sizeGB: 8.0,
+          contextWindowSize: 16384, // optional
         ),
       ],
     ),
@@ -153,6 +176,22 @@ final service = await KernelService.create(
       learningInterval: Duration(minutes: 5), // optional
       learningMaxPerRun: 1, // optional
       learningQueueLimit: 500, // optional
+      opentoolDaemonHost: '127.0.0.1', // optional
+      opentoolDaemonPort: 19627, // optional
+    ),
+  ),
+);
+```
+
+To start without LLM:
+
+```dart
+final service = await KernelService.create(
+  KernelServiceConfig(
+    liteAgent: LiteAgentConfig(baseUrl: '<LITEAGENT_BASE_URL>'),
+    embeddings: EmbeddingsConfig(
+      baseUrl: '<LITE_EMBEDDINGS_BASE_URL>',
+      docsName: '<LITE_EMBEDDINGS_DOCS_NAME>',
     ),
   ),
 );

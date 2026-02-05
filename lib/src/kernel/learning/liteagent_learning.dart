@@ -72,6 +72,7 @@ class LiteAgentLearning implements Learning {
           final handler = _LearningToolHandler(
             record: record,
             onFirstToken: context.markFirstToken,
+            onMessageCallback: (message) => _recordTokenUsage(message, context),
             onSignal: (signal) {
               if (!completer.isCompleted) {
                 completer.complete(signal);
@@ -154,15 +155,29 @@ class LiteAgentLearning implements Learning {
 
 }
 
+void _recordTokenUsage(AgentMessage message, LlmCallContext context) {
+  final usage = message.completions?.usage;
+  if (usage == null) {
+    return;
+  }
+  context.setTotalTokens(usage.totalTokens);
+  final contextUsageRatio = usage.contextUsageRatio;
+  if (contextUsageRatio != null) {
+    context.setContextUsageRatio(contextUsageRatio.toDouble());
+  }
+}
+
 class _LearningToolHandler extends AgentMessageHandler {
   final LearningRecord record;
   final void Function() onFirstToken;
+  final void Function(AgentMessage message) onMessageCallback;
   final void Function(PreferenceSignal? signal) onSignal;
   final void Function() onDoneCallback;
 
   _LearningToolHandler({
     required this.record,
     required this.onFirstToken,
+    required this.onMessageCallback,
     required this.onSignal,
     required this.onDoneCallback,
   });
@@ -205,6 +220,7 @@ class _LearningToolHandler extends AgentMessageHandler {
   @override
   Future<void> onMessage(String sessionId, AgentMessage agentMessage) async {
     onFirstToken();
+    onMessageCallback(agentMessage);
   }
 
   @override

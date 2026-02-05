@@ -23,6 +23,44 @@ abstract class Planning {
   );
 }
 
+class SwitchablePlanning implements Planning {
+  Planning _delegate;
+
+  SwitchablePlanning(this._delegate);
+
+  Planning get delegate => _delegate;
+
+  set delegate(Planning delegate) {
+    _delegate = delegate;
+  }
+
+  @override
+  Future<PlanResult> create(
+    Percept percept,
+    MemorySnapshot memory,
+    PreferenceSnapshot preference,
+  ) {
+    return _delegate.create(percept, memory, preference);
+  }
+}
+
+class ThrowingPlanning implements Planning {
+  final String message;
+
+  ThrowingPlanning({
+    this.message = 'LLM models not configured.',
+  });
+
+  @override
+  Future<PlanResult> create(
+    Percept percept,
+    MemorySnapshot memory,
+    PreferenceSnapshot preference,
+  ) {
+    throw StateError(message);
+  }
+}
+
 class RuleBasedPlanning extends Planning {
   final double minConfidence;
   final double minDelta;
@@ -192,6 +230,7 @@ class LiteAgentPlanning extends Planning {
           memory: memory,
           preference: preference,
           onFirstToken: context.markFirstToken,
+          onMessageCallback: (message) => _recordTokenUsage(message, context),
           onPlan: (plan) {
             if (!completer.isCompleted) {
               completer.complete(plan);
@@ -415,10 +454,23 @@ class LiteAgentPlanning extends Planning {
 
 }
 
+void _recordTokenUsage(AgentMessage message, LlmCallContext context) {
+  final usage = message.completions?.usage;
+  if (usage == null) {
+    return;
+  }
+  context.setTotalTokens(usage.totalTokens);
+  final contextUsageRatio = usage.contextUsageRatio;
+  if (contextUsageRatio != null) {
+    context.setContextUsageRatio(contextUsageRatio.toDouble());
+  }
+}
+
 class _PlanningAgentHandler extends AgentMessageHandler {
   final MemorySnapshot memory;
   final PreferenceSnapshot preference;
   final void Function() onFirstToken;
+  final void Function(AgentMessage message) onMessageCallback;
   final void Function(PlanResult plan) onPlan;
   final void Function() onDoneCallback;
 
@@ -426,6 +478,7 @@ class _PlanningAgentHandler extends AgentMessageHandler {
     required this.memory,
     required this.preference,
     required this.onFirstToken,
+    required this.onMessageCallback,
     required this.onPlan,
     required this.onDoneCallback,
   });
@@ -476,6 +529,7 @@ class _PlanningAgentHandler extends AgentMessageHandler {
   @override
   Future<void> onMessage(String sessionId, AgentMessage agentMessage) async {
     onFirstToken();
+    onMessageCallback(agentMessage);
   }
 
   @override

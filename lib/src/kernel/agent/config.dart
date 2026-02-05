@@ -14,6 +14,7 @@ class LlmConfigHolder {
       baseUrl: _value.baseUrl,
       apiKey: _value.apiKey,
       model: model,
+      contextWindowSize: _value.contextWindowSize,
     );
   }
 }

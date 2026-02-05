@@ -40,6 +40,7 @@ class LlmCallMetrics {
   final DateTime? firstTokenAt;
   final DateTime doneAt;
   final int? totalTokens;
+  final double? contextUsageRatio;
   final Duration? ttft;
   final double? tps;
   final bool success;
@@ -52,6 +53,7 @@ class LlmCallMetrics {
     required this.success,
     this.firstTokenAt,
     this.totalTokens,
+    this.contextUsageRatio,
     this.ttft,
     this.tps,
     this.error,
@@ -63,6 +65,7 @@ class LlmCallContext {
   final void Function(DateTime firstTokenAt) onFirstToken;
   DateTime? firstTokenAt;
   int? totalTokens;
+  double? contextUsageRatio;
 
   LlmCallContext({
     required this.meta,
@@ -80,6 +83,10 @@ class LlmCallContext {
   void setTotalTokens(int total) {
     totalTokens = total;
   }
+
+  void setContextUsageRatio(double ratio) {
+    contextUsageRatio = ratio;
+  }
 }
 
 class KernelLlmModel {
@@ -91,6 +98,7 @@ class KernelLlmModel {
   final num paramsB;
   final String quantization;
   final num sizeGB;
+  final int? contextWindowSize;
 
   const KernelLlmModel({
     required this.baseUrl,
@@ -101,6 +109,7 @@ class KernelLlmModel {
     required this.paramsB,
     required this.quantization,
     required this.sizeGB,
+    this.contextWindowSize,
   });
 
   String modelKey({String? apiKeyOverride}) {

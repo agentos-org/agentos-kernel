@@ -5,6 +5,34 @@ abstract class Perception {
   Future<Percept> process(RawInput input);
 }
 
+class SwitchablePerception implements Perception {
+  Perception _delegate;
+
+  SwitchablePerception(this._delegate);
+
+  Perception get delegate => _delegate;
+
+  set delegate(Perception delegate) {
+    _delegate = delegate;
+  }
+
+  @override
+  Future<Percept> process(RawInput input) => _delegate.process(input);
+}
+
+class ThrowingPerception implements Perception {
+  final String message;
+
+  ThrowingPerception({
+    this.message = 'LLM models not configured.',
+  });
+
+  @override
+  Future<Percept> process(RawInput input) {
+    throw StateError(message);
+  }
+}
+
 class RuleBasedPerception implements Perception {
   final double minTextConfidence;
   final double structuredConfidence;

@@ -2,7 +2,7 @@ import 'package:lite_embeddings_sdk_dart/lite_embeddings_sdk_dart.dart' as embed
 
 import 'vector_store.dart';
 
-class LiteEmbeddingsVectorStore implements VectorStore {
+class LiteEmbeddingsVectorStore implements TextQueryVectorStore {
   final embeddings.LiteEmbeddingsClient client;
   final String docsId;
   final embeddings.LLMConfig llmConfig;
@@ -51,6 +51,7 @@ class LiteEmbeddingsVectorStore implements VectorStore {
     );
   }
 
+  @override
   Future<List<VectorMatch>> queryByText(
     String text, {
     int limit = 5,

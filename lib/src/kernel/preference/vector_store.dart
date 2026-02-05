@@ -22,3 +22,80 @@ abstract class VectorStore {
     int limit = 5,
   });
 }
+
+abstract class TextQueryVectorStore implements VectorStore {
+  Future<List<VectorMatch>> queryByText(
+    String text, {
+    int limit = 5,
+  });
+}
+
+class SwitchableTextQueryVectorStore implements TextQueryVectorStore {
+  TextQueryVectorStore _delegate;
+
+  SwitchableTextQueryVectorStore(this._delegate);
+
+  TextQueryVectorStore get delegate => _delegate;
+
+  set delegate(TextQueryVectorStore delegate) {
+    _delegate = delegate;
+  }
+
+  @override
+  Future<void> upsert({
+    required String id,
+    required List<double> vector,
+    Map<String, dynamic>? payload,
+  }) {
+    return _delegate.upsert(id: id, vector: vector, payload: payload);
+  }
+
+  @override
+  Future<List<VectorMatch>> query({
+    required List<double> vector,
+    int limit = 5,
+  }) {
+    return _delegate.query(vector: vector, limit: limit);
+  }
+
+  @override
+  Future<List<VectorMatch>> queryByText(
+    String text, {
+    int limit = 5,
+  }) {
+    return _delegate.queryByText(text, limit: limit);
+  }
+}
+
+class ThrowingTextQueryVectorStore implements TextQueryVectorStore {
+  final String message;
+
+  ThrowingTextQueryVectorStore({
+    this.message = 'Embeddings not configured.',
+  });
+
+  @override
+  Future<void> upsert({
+    required String id,
+    required List<double> vector,
+    Map<String, dynamic>? payload,
+  }) {
+    throw StateError(message);
+  }
+
+  @override
+  Future<List<VectorMatch>> query({
+    required List<double> vector,
+    int limit = 5,
+  }) {
+    throw StateError(message);
+  }
+
+  @override
+  Future<List<VectorMatch>> queryByText(
+    String text, {
+    int limit = 5,
+  }) {
+    throw StateError(message);
+  }
+}

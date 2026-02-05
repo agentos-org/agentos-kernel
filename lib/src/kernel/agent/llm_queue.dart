@@ -215,6 +215,7 @@ class LlmQueue {
       firstTokenAt: firstTokenAt,
       doneAt: doneAt,
       totalTokens: context.totalTokens,
+      contextUsageRatio: context.contextUsageRatio,
       ttft: ttft,
       tps: tps,
       success: success,

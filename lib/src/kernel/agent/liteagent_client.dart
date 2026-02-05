@@ -35,9 +35,14 @@ class LiteAgentClient {
       isChunk: true,
     );
     final message = await liteagent.chatSimple(session, task);
-    final totalTokens = message.completions?.usage?.totalTokens;
+    final usage = message.completions?.usage;
+    final totalTokens = usage?.totalTokens;
     if (totalTokens != null) {
       context.setTotalTokens(totalTokens);
+    }
+    final contextUsageRatio = usage?.contextUsageRatio;
+    if (contextUsageRatio != null) {
+      context.setContextUsageRatio(contextUsageRatio.toDouble());
     }
     return LiteAgentResponse(
       message: message,
@@ -87,9 +92,14 @@ class LiteAgentClient {
     );
     await liteagent.chat(session, task, handler);
     final message = await completer.future;
-    final totalTokens = message.completions?.usage?.totalTokens;
+    final usage = message.completions?.usage;
+    final totalTokens = usage?.totalTokens;
     if (totalTokens != null) {
       context.setTotalTokens(totalTokens);
+    }
+    final contextUsageRatio = usage?.contextUsageRatio;
+    if (contextUsageRatio != null) {
+      context.setContextUsageRatio(contextUsageRatio.toDouble());
     }
     return LiteAgentResponse(
       message: message,

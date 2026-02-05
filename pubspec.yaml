@@ -19,6 +19,8 @@ dependencies:
     path: ../liteagent_sdk_dart
   opentool_dart:
     path: ../opentool-hub/opentool-dart
+  opentool_daemon:
+    path: ../opentool-hub/opentool-util-daemon
 
 dev_dependencies:
   build_runner: ^2.4.12

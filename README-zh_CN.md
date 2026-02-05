@@ -24,6 +24,9 @@ dart run example/service_example.dart
   - 组装完整 kernel：LiteAgent 感知/规划/学习、OpenTool 执行、
     使用 Drift 记忆（SQLite3）、Hive 任务管理、
     Hive 偏好存储 + LiteEmbeddings 向量检索。
+  - 当 `llm` 为 null 或 `llm.models` 为空时，kernel 可启动但不启用 LLM；
+    感知/规划/学习/摘要等依赖 LLM 的逻辑会抛出 `StateError`。
+  - embeddings 无法配置时，向量存储在调用时会抛出 `StateError`。
 
 运行时（意图流程）：
 - `submitRaw({source, content, data})` → `JobHandle`
@@ -53,11 +56,15 @@ dart run example/service_example.dart
 
 模型配置：
 - `updateLlmModels(List<KernelLlmModel>)`
-  - 替换 LLM 模型列表。
+  - 替换 LLM 模型列表（若之前未配置 LLM，将启用 LLM 组件）。
 
 只读信息：
 - `getModelHealth()` → `Map<String, ModelHealthSnapshot>`
   - 获取模型可用性（仅在 AdaptiveSupervision 下生效）。
+- `getExternalServiceHealth()` → `ExternalServiceHealthSnapshot`
+  - 获取 LiteAgent/OpenTool/LLM 的健康状态快照。
+- `onExternalServiceHealthChange((ExternalServiceHealth) onChange)`
+  - 订阅外部服务健康变更；通过返回的 subscription `cancel()` 取消订阅。
 - `getMemorySnapshot({scope, limit})` → `MemorySnapshot`
   - 获取指定 scope 的记忆快照（仅返回最近记录）。
 - `getPreferenceSnapshot()` → `PreferenceSnapshot`
@@ -68,9 +75,22 @@ dart run example/service_example.dart
 
 ## LLM 路由
 
-`KernelServiceConfig` 支持一个模型列表。
+`KernelServiceConfig` 支持一个模型列表（也可传 `null` 来禁用 LLM）。
 运行时会选择第一个“可用”的模型（基于 supervision 健康状态），
 如果首选模型不可用则自动降级到下一个模型。
+如果未提供 LLM 模型，依赖 LLM 的逻辑会抛出 `StateError`，
+直到调用 `updateLlmModels` 为止。
+
+## 外部服务健康
+
+Adaptive supervision 会轮询外部服务：
+- LiteAgent `/version`（SDK）每 10s
+- OpenTool Daemon `/version`（SDK）每 10s
+- LLM `/health`（baseUrl + `/health`）在 `updateLlmModels` 之后每 10s
+- LiteEmbeddings `/version`（SDK）每 10s
+
+使用 `getExternalServiceHealth()` 获取快照，
+使用 `onExternalServiceHealthChange(...)` 订阅更新。
 
 ## 模块说明
 
@@ -120,6 +140,7 @@ final service = await KernelService.create(
           paramsB: 32,
           quantization: '<LLM_QUANTIZATION>',
           sizeGB: 19.9,
+          contextWindowSize: 32768, // 可选
         ),
         KernelLlmModel(
           baseUrl: '<LLM_BASE_URL_2>',
@@ -130,6 +151,7 @@ final service = await KernelService.create(
           paramsB: 14,
           quantization: '<LLM_QUANTIZATION_2>',
           sizeGB: 8.0,
+          contextWindowSize: 16384, // 可选
         ),
       ],
     ),
@@ -153,6 +175,22 @@ final service = await KernelService.create(
       learningInterval: Duration(minutes: 5), // optional
       learningMaxPerRun: 1, // optional
       learningQueueLimit: 500, // optional
+      opentoolDaemonHost: '127.0.0.1', // optional
+      opentoolDaemonPort: 19627, // optional
+    ),
+  ),
+);
+```
+
+无 LLM 启动示例：
+
+```dart
+final service = await KernelService.create(
+  KernelServiceConfig(
+    liteAgent: LiteAgentConfig(baseUrl: '<LITEAGENT_BASE_URL>'),
+    embeddings: EmbeddingsConfig(
+      baseUrl: '<LITE_EMBEDDINGS_BASE_URL>',
+      docsName: '<LITE_EMBEDDINGS_DOCS_NAME>',
     ),
   ),
 );

@@ -6,6 +6,7 @@ import 'package:hive/hive.dart';
 import 'package:lite_embeddings_sdk_dart/lite_embeddings_sdk_dart.dart'
     as embeddings;
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
+import 'package:opentool_daemon/opentool_daemon_client.dart';
 import 'package:opentool_dart/opentool_client.dart';
 
 import '../kernel/execution/execution.dart';
@@ -16,6 +17,7 @@ import '../kernel/job_manager_hive.dart';
 import '../kernel/kernel.dart';
 import '../kernel/learning/deferred_learning.dart';
 import '../kernel/learning/liteagent_learning.dart';
+import '../kernel/learning/learning.dart';
 import '../kernel/agent/liteagent_client.dart';
 import '../kernel/agent/llm_metrics.dart';
 import '../kernel/agent/llm_queue.dart';
@@ -36,6 +38,7 @@ import '../kernel/planning/planning.dart';
 import '../kernel/preference/hive_preference.dart';
 import '../kernel/preference/lite_embeddings_vector_store.dart';
 import '../kernel/preference/vector_store.dart';
+import '../kernel/supervision/model.dart';
 import '../kernel/supervision/supervision.dart';
 import 'dto.dart';
 
@@ -95,6 +98,8 @@ class KernelRuntimeConfig {
   final Duration learningInterval;
   final int learningMaxPerRun;
   final int learningQueueLimit;
+  final String opentoolDaemonHost;
+  final int opentoolDaemonPort;
 
   const KernelRuntimeConfig({
     this.hivePath = '.hive',
@@ -118,18 +123,20 @@ class KernelRuntimeConfig {
     this.learningInterval = const Duration(minutes: 5),
     this.learningMaxPerRun = 1,
     this.learningQueueLimit = 500,
+    this.opentoolDaemonHost = '127.0.0.1',
+    this.opentoolDaemonPort = DAEMON_DEFAULT_PORT,
   });
 }
 
 class KernelServiceConfig {
   final LiteAgentConfig liteAgent;
-  final LlmConfigGroup llm;
+  final LlmConfigGroup? llm;
   final EmbeddingsConfig embeddings;
   final KernelRuntimeConfig runtime;
 
   const KernelServiceConfig({
     required this.liteAgent,
-    required this.llm,
+    this.llm,
     required this.embeddings,
     this.runtime = const KernelRuntimeConfig(),
   });
@@ -139,7 +146,16 @@ class KernelService {
   final Kernel _kernel;
   final PerceptionAgentRunner? _perceptionRunner;
   static const String _defaultUserId = 'default';
-  final LlmConfigPool? _llmConfigPool;
+  LlmConfigPool? _llmConfigPool;
+  final SwitchablePerception? _perceptionSwitch;
+  final SwitchablePlanning? _planningSwitch;
+  final SwitchableLearning? _learningSwitch;
+  final LiteAgentClient? _liteAgentClient;
+  final LlmQueue? _llmQueue;
+  final OpenToolDirectory? _openToolDirectory;
+  final KernelLogger? _logger;
+  final DriftMemory? _driftMemory;
+  bool _memorySummarizerStarted;
   final _JobSnapshotDispatcher _jobSnapshotDispatcher;
   AppCalledTool? _appCalledTool;
   final KernelRuntimeConfig _runtimeConfig;
@@ -149,10 +165,28 @@ class KernelService {
     this._kernel, {
     PerceptionAgentRunner? perceptionRunner,
     LlmConfigPool? llmConfigPool,
+    SwitchablePerception? perceptionSwitch,
+    SwitchablePlanning? planningSwitch,
+    SwitchableLearning? learningSwitch,
+    LiteAgentClient? liteAgentClient,
+    LlmQueue? llmQueue,
+    OpenToolDirectory? openToolDirectory,
+    KernelLogger? logger,
+    DriftMemory? driftMemory,
+    bool memorySummarizerStarted = false,
     _JobSnapshotDispatcher? jobSnapshotDispatcher,
     KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
   })  : _perceptionRunner = perceptionRunner,
         _llmConfigPool = llmConfigPool,
+        _perceptionSwitch = perceptionSwitch,
+        _planningSwitch = planningSwitch,
+        _learningSwitch = learningSwitch,
+        _liteAgentClient = liteAgentClient,
+        _llmQueue = llmQueue,
+        _openToolDirectory = openToolDirectory,
+        _logger = logger,
+        _driftMemory = driftMemory,
+        _memorySummarizerStarted = memorySummarizerStarted,
         _jobSnapshotDispatcher =
             jobSnapshotDispatcher ?? _JobSnapshotDispatcher(),
         _runtimeConfig = runtimeConfig;
@@ -174,52 +208,77 @@ class KernelService {
       logger: logger,
     );
 
-    if (config.llm.models.isEmpty) {
-      throw ArgumentError('llmModels is required.');
-    }
-    final llmConfigs = config.llm.models
-        .map(
-          (model) => LLMConfig(
-            baseUrl: model.baseUrl,
-            apiKey: model.apiKey ?? '',
-            model: model.model,
-          ),
-        )
-        .toList();
-    final llmConfigPool = LlmConfigPool(llmConfigs);
-    supervision.updateModelCatalog(config.llm.models);
-    final llmConfig = llmConfigPool.pick();
-    final llmConfigResolver = () => llmConfigPool.pick(
-          isAvailable: (candidate) =>
-              _isModelAvailable(supervision, candidate),
-        );
-
     final liteAgentClient = LiteAgentClient(
       baseUrl: config.liteAgent.baseUrl,
       apiKey: config.liteAgent.apiKey,
     );
+    supervision.startExternalServiceMonitoring(
+      liteAgentBaseUrl: config.liteAgent.baseUrl,
+      opentoolHost: config.runtime.opentoolDaemonHost,
+      opentoolPort: config.runtime.opentoolDaemonPort,
+      embeddingsBaseUrl: config.embeddings.baseUrl,
+    );
+
+    LlmConfigPool? llmConfigPool;
+    LlmConfigResolver? llmConfigResolver;
+    LLMConfig? llmConfig;
+    final llmModels = config.llm?.models ?? const <KernelLlmModel>[];
+    if (llmModels.isNotEmpty) {
+      final llmConfigs = llmModels
+          .map(
+            (model) => LLMConfig(
+              baseUrl: model.baseUrl,
+              apiKey: model.apiKey ?? '',
+              model: model.model,
+              contextWindowSize: model.contextWindowSize,
+            ),
+          )
+          .toList();
+      llmConfigPool = LlmConfigPool(llmConfigs);
+      supervision.updateModelCatalog(llmModels);
+      llmConfig = llmConfigPool.pick();
+      llmConfigResolver = () => llmConfigPool!.pick(
+            isAvailable: (candidate) =>
+                _isModelAvailable(supervision, candidate),
+          );
+      supervision.startLlmHealthMonitoring(llmModels);
+    }
 
     final embeddingsClient = embeddings.LiteEmbeddingsClient(
       baseUrl: config.embeddings.baseUrl,
       bearerToken: config.embeddings.apiKey,
     );
-    final embeddingsModel = _resolveEmbeddingsLlmModel(
-      config.llm.models,
-      config.embeddings.llmModel,
-    );
-    final embeddingsLlmConfig = embeddings.LLMConfig(
-      baseUrl: embeddingsModel.baseUrl,
-      apiKey: embeddingsModel.apiKey ?? '',
-      model: _resolveEmbeddingsModel(
-        config.embeddings.model,
-        embeddingsModel.model,
-      ),
-    );
-    final embeddingsDocsId = await _ensureDocsId(
-      embeddingsClient,
-      config.embeddings.docsName,
-      embeddingsLlmConfig,
-    );
+    TextQueryVectorStore embeddingsVectorStore;
+    if (llmModels.isNotEmpty) {
+      try {
+        final embeddingsModel = _resolveEmbeddingsLlmModel(
+          llmModels,
+          config.embeddings.llmModel,
+        );
+        final embeddingsLlmConfig = embeddings.LLMConfig(
+          baseUrl: embeddingsModel.baseUrl,
+          apiKey: embeddingsModel.apiKey ?? '',
+          model: _resolveEmbeddingsModel(
+            config.embeddings.model,
+            embeddingsModel.model,
+          ),
+        );
+        final embeddingsDocsId = await _ensureDocsId(
+          embeddingsClient,
+          config.embeddings.docsName,
+          embeddingsLlmConfig,
+        );
+        embeddingsVectorStore = LiteEmbeddingsVectorStore(
+          client: embeddingsClient,
+          docsId: embeddingsDocsId,
+          llmConfig: embeddingsLlmConfig,
+        );
+      } catch (_) {
+        embeddingsVectorStore = ThrowingTextQueryVectorStore();
+      }
+    } else {
+      embeddingsVectorStore = ThrowingTextQueryVectorStore();
+    }
 
     Hive.init(Directory(config.runtime.hivePath).path);
     final memoryDbPath = config.runtime.memoryDbPath;
@@ -233,36 +292,16 @@ class KernelService {
 
     final openToolDirectory = OpenToolDirectory();
 
-    final vectorStore = LiteEmbeddingsVectorStore(
-      client: embeddingsClient,
-      docsId: embeddingsDocsId,
-      llmConfig: embeddingsLlmConfig,
-    );
+    final vectorStore = SwitchableTextQueryVectorStore(embeddingsVectorStore);
     final preference = HivePreference(
       box: preferenceBox,
       vectorStore: vectorStore,
     );
 
+    final perceptionDelegateSwitch =
+        SwitchablePerception(ThrowingPerception());
     final perception = ContextualPerception(
-      delegate: LiteAgentPerception(
-        llmQueue: llmQueue,
-        client: liteAgentClient,
-        llmConfig: llmConfig,
-        llmConfigResolver: llmConfigResolver,
-        systemPrompt:
-            'You are an intent extractor. Use emit_intent or reject_intent.',
-        actionHints: const [
-          'count',
-          'create',
-          'read',
-          'list',
-          'sequentiallyRead',
-          'update',
-          'delete',
-          'run',
-        ],
-        fallback: RuleBasedPerception(),
-      ),
+      delegate: perceptionDelegateSwitch,
       enrich: (input) async {
         final text = input.text?.trim();
         final targetUserId = input.userId;
@@ -304,7 +343,6 @@ class KernelService {
         }
       },
     );
-
     final jobSnapshotDispatcher = _JobSnapshotDispatcher();
     final jobManager = _ObservableJobManager(
       HiveJobManager(box: jobBox),
@@ -314,44 +352,72 @@ class KernelService {
       path: resolvedMemoryDbPath,
       summaryLimit: config.runtime.memorySummaryLimit,
     );
-    final liteAgentLearning = LiteAgentLearning(
-      llmQueue: llmQueue,
-      client: liteAgentClient,
-      preference: preference,
-      llmConfig: llmConfig,
-      llmConfigResolver: llmConfigResolver,
-      systemPrompt:
-          'You extract user preference signals. Use emit_preference or reject_preference.',
-    );
-    final learning = DeferredLearning(
-      delegate: liteAgentLearning,
-      llmQueue: llmQueue,
-      logger: logger,
-      enabled: config.runtime.learningDeferredEnabled,
-      interval: config.runtime.learningInterval,
-      maxPerRun: config.runtime.learningMaxPerRun,
-      queueLimit: config.runtime.learningQueueLimit,
-    );
-    final kernel = Kernel(
-      perception: perception,
-      planning: LiteAgentPlanning(
+    final learningSwitch = SwitchableLearning(ThrowingLearning());
+    final planningSwitch = SwitchablePlanning(ThrowingPlanning());
+    if (llmConfig != null && llmConfigResolver != null) {
+      perceptionDelegateSwitch.delegate = LiteAgentPerception(
         llmQueue: llmQueue,
         client: liteAgentClient,
         llmConfig: llmConfig,
         llmConfigResolver: llmConfigResolver,
-        systemPrompt: 'You plan the next action. Call exactly one planning tool.',
+        systemPrompt:
+            'You are an intent extractor. Use emit_intent or reject_intent.',
+        actionHints: const [
+          'count',
+          'create',
+          'read',
+          'list',
+          'sequentiallyRead',
+          'update',
+          'delete',
+          'run',
+        ],
+        fallback: RuleBasedPerception(),
+      );
+      planningSwitch.delegate = LiteAgentPlanning(
+        llmQueue: llmQueue,
+        client: liteAgentClient,
+        llmConfig: llmConfig,
+        llmConfigResolver: llmConfigResolver,
+        systemPrompt:
+            'You plan the next action. Call exactly one planning tool.',
         openToolDirectory: openToolDirectory,
-      ),
+      );
+      final liteAgentLearning = LiteAgentLearning(
+        llmQueue: llmQueue,
+        client: liteAgentClient,
+        preference: preference,
+        llmConfig: llmConfig,
+        llmConfigResolver: llmConfigResolver,
+        systemPrompt:
+            'You extract user preference signals. Use emit_preference or reject_preference.',
+      );
+      learningSwitch.delegate = DeferredLearning(
+        delegate: liteAgentLearning,
+        llmQueue: llmQueue,
+        logger: logger,
+        enabled: config.runtime.learningDeferredEnabled,
+        interval: config.runtime.learningInterval,
+        maxPerRun: config.runtime.learningMaxPerRun,
+        queueLimit: config.runtime.learningQueueLimit,
+      );
+    }
+    final kernel = Kernel(
+      perception: perception,
+      planning: planningSwitch,
       execution: OpenToolExecution(openToolDirectory: openToolDirectory),
       supervision: supervision,
       memory: longTermMemory,
       preference: preference,
-      learning: learning,
+      learning: learningSwitch,
       jobManager: jobManager,
       logger: logger,
     );
 
-    if (config.runtime.memorySummaryEnabled) {
+    var memorySummarizerStarted = false;
+    if (config.runtime.memorySummaryEnabled &&
+        llmConfig != null &&
+        llmConfigResolver != null) {
       MemorySummarizer(
         memory: longTermMemory,
         llmQueue: llmQueue,
@@ -366,10 +432,20 @@ class KernelService {
         maxScopesPerRun: config.runtime.memorySummaryMaxScopesPerRun,
         enabled: true,
       );
+      memorySummarizerStarted = true;
     }
     return KernelService(
       kernel,
       llmConfigPool: llmConfigPool,
+      perceptionSwitch: perceptionDelegateSwitch,
+      planningSwitch: planningSwitch,
+      learningSwitch: learningSwitch,
+      liteAgentClient: liteAgentClient,
+      llmQueue: llmQueue,
+      openToolDirectory: openToolDirectory,
+      logger: logger,
+      driftMemory: longTermMemory,
+      memorySummarizerStarted: memorySummarizerStarted,
       jobSnapshotDispatcher: jobSnapshotDispatcher,
       runtimeConfig: config.runtime,
     );
@@ -440,23 +516,110 @@ class KernelService {
     if (models.isEmpty) {
       throw ArgumentError('models is required.');
     }
-    final pool = _llmConfigPool;
-    if (pool == null) {
-      throw StateError('LLM config is not managed by KernelService.');
-    }
     final configs = models
-        .map(
-          (model) => LLMConfig(
-            baseUrl: model.baseUrl,
-            apiKey: model.apiKey ?? '',
-            model: model.model,
-          ),
-        )
-        .toList();
-    pool.update(configs);
+      .map(
+        (model) => LLMConfig(
+          baseUrl: model.baseUrl,
+          apiKey: model.apiKey ?? '',
+          model: model.model,
+          contextWindowSize: model.contextWindowSize,
+        ),
+      )
+      .toList();
+    var pool = _llmConfigPool;
+    if (pool == null) {
+      pool = LlmConfigPool(configs);
+      _llmConfigPool = pool;
+    } else {
+      pool.update(configs);
+    }
     final supervision = _kernel.supervision;
     if (supervision is AdaptiveSupervision) {
       supervision.updateModelCatalog(models);
+      supervision.startLlmHealthMonitoring(models);
+    }
+
+    final perceptionSwitch = _perceptionSwitch;
+    final planningSwitch = _planningSwitch;
+    final learningSwitch = _learningSwitch;
+    final liteAgentClient = _liteAgentClient;
+    final llmQueue = _llmQueue;
+    final openToolDirectory = _openToolDirectory;
+    if (perceptionSwitch == null ||
+        planningSwitch == null ||
+        learningSwitch == null ||
+        liteAgentClient == null ||
+        llmQueue == null ||
+        openToolDirectory == null) {
+      throw StateError('LLM config is not managed by KernelService.');
+    }
+    final llmConfig = pool.pick();
+    final llmConfigResolver = () => pool!.pick(
+          isAvailable: (candidate) =>
+              _isModelAvailable(_kernel.supervision, candidate),
+        );
+    perceptionSwitch.delegate = LiteAgentPerception(
+      llmQueue: llmQueue,
+      client: liteAgentClient,
+      llmConfig: llmConfig,
+      llmConfigResolver: llmConfigResolver,
+      systemPrompt: 'You are an intent extractor. Use emit_intent or reject_intent.',
+      actionHints: const [
+        'count',
+        'create',
+        'read',
+        'list',
+        'sequentiallyRead',
+        'update',
+        'delete',
+        'run',
+      ],
+      fallback: RuleBasedPerception(),
+    );
+    planningSwitch.delegate = LiteAgentPlanning(
+      llmQueue: llmQueue,
+      client: liteAgentClient,
+      llmConfig: llmConfig,
+      llmConfigResolver: llmConfigResolver,
+      systemPrompt: 'You plan the next action. Call exactly one planning tool.',
+      openToolDirectory: openToolDirectory,
+    );
+    final liteAgentLearning = LiteAgentLearning(
+      llmQueue: llmQueue,
+      client: liteAgentClient,
+      preference: _kernel.preference,
+      llmConfig: llmConfig,
+      llmConfigResolver: llmConfigResolver,
+      systemPrompt:
+          'You extract user preference signals. Use emit_preference or reject_preference.',
+    );
+    learningSwitch.delegate = DeferredLearning(
+      delegate: liteAgentLearning,
+      llmQueue: llmQueue,
+      logger: _logger,
+      enabled: _runtimeConfig.learningDeferredEnabled,
+      interval: _runtimeConfig.learningInterval,
+      maxPerRun: _runtimeConfig.learningMaxPerRun,
+      queueLimit: _runtimeConfig.learningQueueLimit,
+    );
+    if (_runtimeConfig.memorySummaryEnabled &&
+        !_memorySummarizerStarted &&
+        _driftMemory != null) {
+      MemorySummarizer(
+        memory: _driftMemory,
+        llmQueue: llmQueue,
+        client: liteAgentClient,
+        llmConfig: llmConfig,
+        llmConfigResolver: llmConfigResolver,
+        logger: _logger,
+        interval: _runtimeConfig.memorySummaryInterval,
+        recentWindow: _runtimeConfig.memorySummaryRecentWindow,
+        maxRecords: _runtimeConfig.memorySummaryMaxRecords,
+        minRecords: _runtimeConfig.memorySummaryMinRecords,
+        maxScopesPerRun: _runtimeConfig.memorySummaryMaxScopesPerRun,
+        enabled: true,
+      );
+      _memorySummarizerStarted = true;
     }
   }
 
@@ -466,6 +629,24 @@ class KernelService {
       return supervision.modelHealthSnapshot();
     }
     return const {};
+  }
+
+  ExternalServiceHealthSnapshot getExternalServiceHealth() {
+    final supervision = _kernel.supervision;
+    if (supervision is AdaptiveSupervision) {
+      return supervision.externalServiceHealthSnapshot();
+    }
+    return const ExternalServiceHealthSnapshot(items: {});
+  }
+
+  ExternalServiceHealthSubscription onExternalServiceHealthChange(
+    ExternalServiceHealthListener onChange,
+  ) {
+    final supervision = _kernel.supervision;
+    if (supervision is AdaptiveSupervision) {
+      return supervision.onExternalServiceHealthChange(onChange);
+    }
+    return ExternalServiceHealthSubscription(() {});
   }
 
   /// Get memory snapshot for a scope.

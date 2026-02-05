@@ -72,6 +72,7 @@ class LiteAgentPerception implements Perception {
           final completer = Completer<CandidateIntent?>();
           final handler = _PerceptionToolHandler(
             onFirstToken: context.markFirstToken,
+            onMessageCallback: (message) => _recordTokenUsage(message, context),
             onCandidate: (candidate) {
               if (!completer.isCompleted) {
                 completer.complete(candidate);
@@ -152,6 +153,7 @@ class LiteAgentPerception implements Perception {
       baseUrl: baseUrl,
       apiKey: apiKey is String ? apiKey : baseConfig.apiKey,
       model: model,
+      contextWindowSize: baseConfig.contextWindowSize,
     );
   }
 
@@ -213,13 +215,27 @@ class LiteAgentPerception implements Perception {
 
 }
 
+void _recordTokenUsage(AgentMessage message, LlmCallContext context) {
+  final usage = message.completions?.usage;
+  if (usage == null) {
+    return;
+  }
+  context.setTotalTokens(usage.totalTokens);
+  final contextUsageRatio = usage.contextUsageRatio;
+  if (contextUsageRatio != null) {
+    context.setContextUsageRatio(contextUsageRatio.toDouble());
+  }
+}
+
 class _PerceptionToolHandler extends AgentMessageHandler {
   final void Function() onFirstToken;
+  final void Function(AgentMessage message) onMessageCallback;
   final void Function(CandidateIntent? candidate) onCandidate;
   final void Function() onDoneCallback;
 
   _PerceptionToolHandler({
     required this.onFirstToken,
+    required this.onMessageCallback,
     required this.onCandidate,
     required this.onDoneCallback,
   });
@@ -262,6 +278,7 @@ class _PerceptionToolHandler extends AgentMessageHandler {
   @override
   Future<void> onMessage(String sessionId, AgentMessage agentMessage) async {
     onFirstToken();
+    onMessageCallback(agentMessage);
   }
 
   @override

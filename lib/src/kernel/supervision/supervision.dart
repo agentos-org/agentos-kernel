@@ -1,6 +1,12 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:http/http.dart' as http;
+import 'package:lite_embeddings_sdk_dart/lite_embeddings_sdk_dart.dart'
+    as embeddings;
+import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
+import 'package:opentool_daemon/opentool_daemon_client.dart';
+
 import '../events.dart';
 import '../agent/model.dart';
 import 'model.dart';
@@ -65,10 +71,27 @@ class AdaptiveSupervision implements Supervision {
   final Map<String, _ToolStats> _toolStats = {};
   final Map<String, _ModelHealth> _modelHealth = {};
   Map<String, KernelLlmModel> _modelCatalog = {};
+  final Map<String, ExternalServiceHealth> _externalHealth = {};
+  final List<_ExternalHealthListenerEntry> _externalHealthListeners = [];
 
   Timer? _eventLoopTimer;
   Duration _lastEventLoopLag = Duration.zero;
   int _lastRssBytes = 0;
+  Timer? _liteAgentHealthTimer;
+  Timer? _openToolHealthTimer;
+  Timer? _llmHealthTimer;
+  Timer? _embeddingsHealthTimer;
+  String? _liteAgentBaseUrl;
+  String? _openToolHost;
+  int? _openToolPort;
+  String? _embeddingsBaseUrl;
+  List<KernelLlmModel> _llmHealthModels = const [];
+  bool _liteAgentHealthInFlight = false;
+  bool _openToolHealthInFlight = false;
+  bool _llmHealthInFlight = false;
+  bool _embeddingsHealthInFlight = false;
+  static const Duration _healthInterval = Duration(seconds: 10);
+  static const Duration _healthTimeout = Duration(seconds: 3);
 
   AdaptiveSupervision({
     required this.ttftThreshold,
@@ -207,6 +230,43 @@ class AdaptiveSupervision implements Supervision {
     return snapshot;
   }
 
+  ExternalServiceHealthSnapshot externalServiceHealthSnapshot() {
+    return ExternalServiceHealthSnapshot(
+      items: Map<String, ExternalServiceHealth>.from(_externalHealth),
+    );
+  }
+
+  ExternalServiceHealthSubscription onExternalServiceHealthChange(
+    ExternalServiceHealthListener onChange,
+  ) {
+    final entry = _ExternalHealthListenerEntry(onChange);
+    _externalHealthListeners.add(entry);
+    return ExternalServiceHealthSubscription(() {
+      entry.cancel();
+      _externalHealthListeners.remove(entry);
+    });
+  }
+
+  void startExternalServiceMonitoring({
+    required String liteAgentBaseUrl,
+    String? opentoolHost,
+    int? opentoolPort,
+    String? embeddingsBaseUrl,
+  }) {
+    _liteAgentBaseUrl = liteAgentBaseUrl;
+    _openToolHost = opentoolHost;
+    _openToolPort = opentoolPort;
+    _embeddingsBaseUrl = embeddingsBaseUrl;
+    _ensureLiteAgentMonitor();
+    _ensureOpenToolMonitor();
+    _ensureEmbeddingsMonitor();
+  }
+
+  void startLlmHealthMonitoring(List<KernelLlmModel> models) {
+    _llmHealthModels = List<KernelLlmModel>.from(models);
+    _ensureLlmMonitor();
+  }
+
   @override
   bool isSystemBusy() {
     _ensureEventLoopProbe();
@@ -301,6 +361,241 @@ class AdaptiveSupervision implements Supervision {
       _lastRssBytes = ProcessInfo.currentRss;
     });
   }
+
+  void _ensureLiteAgentMonitor() {
+    if (_liteAgentHealthTimer != null) {
+      return;
+    }
+    _liteAgentHealthTimer =
+        Timer.periodic(_healthInterval, (_) => _checkLiteAgentHealth());
+    unawaited(_checkLiteAgentHealth());
+  }
+
+  void _ensureOpenToolMonitor() {
+    if (_openToolHealthTimer != null) {
+      return;
+    }
+    _openToolHealthTimer =
+        Timer.periodic(_healthInterval, (_) => _checkOpenToolHealth());
+    unawaited(_checkOpenToolHealth());
+  }
+
+  void _ensureLlmMonitor() {
+    if (_llmHealthTimer != null) {
+      return;
+    }
+    _llmHealthTimer =
+        Timer.periodic(_healthInterval, (_) => _checkLlmHealth());
+    unawaited(_checkLlmHealth());
+  }
+
+  void _ensureEmbeddingsMonitor() {
+    if (_embeddingsHealthTimer != null) {
+      return;
+    }
+    _embeddingsHealthTimer =
+        Timer.periodic(_healthInterval, (_) => _checkEmbeddingsHealth());
+    unawaited(_checkEmbeddingsHealth());
+  }
+
+  Future<void> _checkLiteAgentHealth() async {
+    if (_liteAgentHealthInFlight) {
+      return;
+    }
+    final baseUrl = _liteAgentBaseUrl;
+    if (baseUrl == null || baseUrl.trim().isEmpty) {
+      return;
+    }
+    _liteAgentHealthInFlight = true;
+    final id = 'liteagent';
+    try {
+      final liteagent = LiteAgentSDK(baseUrl: baseUrl.trim());
+      final version = await liteagent.getVersion();
+      _recordExternalHealth(
+        ExternalServiceHealth(
+          id: id,
+          type: ExternalServiceType.liteagent,
+          available: true,
+          version: version.version,
+          lastSuccessAt: DateTime.now(),
+          endpoint: baseUrl.trim(),
+        ),
+      );
+    } catch (error) {
+      _recordExternalHealth(
+        ExternalServiceHealth(
+          id: id,
+          type: ExternalServiceType.liteagent,
+          available: false,
+          lastFailureAt: DateTime.now(),
+          message: error.toString(),
+          endpoint: baseUrl.trim(),
+        ),
+      );
+    } finally {
+      _liteAgentHealthInFlight = false;
+    }
+  }
+
+  Future<void> _checkOpenToolHealth() async {
+    if (_openToolHealthInFlight) {
+      return;
+    }
+    _openToolHealthInFlight = true;
+    final host = _openToolHost;
+    final port = _openToolPort;
+    final id = 'opentool_daemon';
+    try {
+      final client = DaemonClient(
+        host: host ?? '127.0.0.1',
+        port: port ?? DAEMON_DEFAULT_PORT,
+      );
+      final version = await client.getVersion();
+      final endpoint =
+          'http://${client.host}:${client.port}${client.prefix}';
+      _recordExternalHealth(
+        ExternalServiceHealth(
+          id: id,
+          type: ExternalServiceType.opentoolDaemon,
+          available: true,
+          version: version.version,
+          lastSuccessAt: DateTime.now(),
+          endpoint: endpoint,
+        ),
+      );
+    } catch (error) {
+      _recordExternalHealth(
+        ExternalServiceHealth(
+          id: id,
+          type: ExternalServiceType.opentoolDaemon,
+          available: false,
+          lastFailureAt: DateTime.now(),
+          message: error.toString(),
+        ),
+      );
+    } finally {
+      _openToolHealthInFlight = false;
+    }
+  }
+
+  Future<void> _checkEmbeddingsHealth() async {
+    if (_embeddingsHealthInFlight) {
+      return;
+    }
+    final baseUrl = _embeddingsBaseUrl;
+    if (baseUrl == null || baseUrl.trim().isEmpty) {
+      return;
+    }
+    _embeddingsHealthInFlight = true;
+    final id = 'embeddings';
+    try {
+      final client = embeddings.LiteEmbeddingsClient(
+        baseUrl: baseUrl.trim(),
+      );
+      final version = await client.getVersion();
+      _recordExternalHealth(
+        ExternalServiceHealth(
+          id: id,
+          type: ExternalServiceType.embeddings,
+          available: true,
+          version: version.version,
+          lastSuccessAt: DateTime.now(),
+          endpoint: baseUrl.trim(),
+        ),
+      );
+    } catch (error) {
+      _recordExternalHealth(
+        ExternalServiceHealth(
+          id: id,
+          type: ExternalServiceType.embeddings,
+          available: false,
+          lastFailureAt: DateTime.now(),
+          message: error.toString(),
+          endpoint: baseUrl.trim(),
+        ),
+      );
+    } finally {
+      _embeddingsHealthInFlight = false;
+    }
+  }
+
+  Future<void> _checkLlmHealth() async {
+    if (_llmHealthInFlight) {
+      return;
+    }
+    if (_llmHealthModels.isEmpty) {
+      return;
+    }
+    _llmHealthInFlight = true;
+    final grouped = <String, List<KernelLlmModel>>{};
+    for (final model in _llmHealthModels) {
+      grouped.putIfAbsent(model.baseUrl, () => []).add(model);
+    }
+    for (final entry in grouped.entries) {
+      final baseUrl = entry.key.trim();
+      final endpoint = _llmHealthEndpoint(baseUrl);
+      bool ok = false;
+      String? message;
+      try {
+        final response = await http
+            .get(Uri.parse(endpoint))
+            .timeout(_healthTimeout);
+        ok = response.statusCode >= 200 && response.statusCode < 300;
+        if (!ok) {
+          message = 'HTTP ${response.statusCode}';
+        }
+      } catch (error) {
+        message = error.toString();
+      }
+      for (final model in entry.value) {
+        final modelKey = model.modelKey();
+        _recordExternalHealth(
+          ExternalServiceHealth(
+            id: 'llm:$modelKey',
+            type: ExternalServiceType.llm,
+            available: ok,
+            lastSuccessAt: ok ? DateTime.now() : null,
+            lastFailureAt: ok ? null : DateTime.now(),
+            message: ok ? null : message,
+            endpoint: endpoint,
+            modelKey: modelKey,
+          ),
+        );
+      }
+    }
+    _llmHealthInFlight = false;
+  }
+
+  String _llmHealthEndpoint(String baseUrl) {
+    final trimmed = baseUrl.trim();
+    if (trimmed.endsWith('/')) {
+      return '${trimmed}health';
+    }
+    return '$trimmed/health';
+  }
+
+  void _recordExternalHealth(ExternalServiceHealth health) {
+    final existing = _externalHealth[health.id];
+    _externalHealth[health.id] = health;
+    final shouldNotify = existing == null ||
+        existing.available != health.available ||
+        existing.version != health.version ||
+        existing.message != health.message ||
+        existing.endpoint != health.endpoint ||
+        existing.modelKey != health.modelKey;
+    if (!shouldNotify) {
+      return;
+    }
+    final listeners = List<_ExternalHealthListenerEntry>.from(
+      _externalHealthListeners,
+    );
+    for (final entry in listeners) {
+      entry.emit(health);
+      if (!entry.active) {
+        _externalHealthListeners.remove(entry);
+      }
+    }
+  }
 }
 
 class ToolStatsSnapshot {
@@ -379,4 +674,22 @@ class _ModelHealth {
   DateTime? cooldownUntil;
   DateTime? lastFailureAt;
   DateTime? lastSuccessAt;
+}
+
+class _ExternalHealthListenerEntry {
+  final ExternalServiceHealthListener _listener;
+  bool active = true;
+
+  _ExternalHealthListenerEntry(this._listener);
+
+  void emit(ExternalServiceHealth health) {
+    if (!active) {
+      return;
+    }
+    _listener(health);
+  }
+
+  void cancel() {
+    active = false;
+  }
 }
