@@ -241,46 +241,59 @@ class Kernel {
     final preferenceSnapshot = await preference.getSnapshot(
       userId: snapshot.userId,
     );
-    final result = await execution.run(
-      ExecutionRequest(
-        jobId: jobId,
-        intent: intent,
-        context: ExecutionContext(
+    try {
+      final result = await execution.run(
+        ExecutionRequest(
+          jobId: jobId,
+          intent: intent,
+          context: ExecutionContext(
+            userId: snapshot.userId,
+            sessionId: snapshot.sessionId,
+            source: snapshot.source,
+            memory: memorySnapshot,
+            preference: preferenceSnapshot,
+            toolReporter: (event) {
+              unawaited(_recordToolEvent(event, snapshot));
+            },
+          ),
+        ),
+      );
+      if (result.success) {
+        final jobResult = result.result ??
+            const JobResult(message: 'Execution completed.');
+        jobManager.markDone(jobId, jobResult);
+        final doneEvent = JobDoneEvent(
+          jobId: jobId,
           userId: snapshot.userId,
           sessionId: snapshot.sessionId,
           source: snapshot.source,
-          memory: memorySnapshot,
-          preference: preferenceSnapshot,
-          toolReporter: (event) {
-            unawaited(_recordToolEvent(event, snapshot));
-          },
-        ),
-      ),
-    );
-    if (result.success) {
-      final jobResult = result.result ??
-          const JobResult(message: 'Execution completed.');
-      jobManager.markDone(jobId, jobResult);
-      final doneEvent = JobDoneEvent(
+          result: jobResult,
+        );
+        await _recordAll(doneEvent);
+        return;
+      }
+      final reason = result.error ?? 'Execution failed.';
+      jobManager.markFailed(jobId, reason);
+      final failedEvent = JobFailedEvent(
         jobId: jobId,
         userId: snapshot.userId,
         sessionId: snapshot.sessionId,
         source: snapshot.source,
-        result: jobResult,
+        reason: reason,
       );
-      await _recordAll(doneEvent);
-      return;
+      await _recordAll(failedEvent);
+    } catch (error) {
+      final reason = 'Execution threw: $error';
+      jobManager.markFailed(jobId, reason);
+      final failedEvent = JobFailedEvent(
+        jobId: jobId,
+        userId: snapshot.userId,
+        sessionId: snapshot.sessionId,
+        source: snapshot.source,
+        reason: reason,
+      );
+      await _recordAll(failedEvent);
     }
-    final reason = result.error ?? 'Execution failed.';
-    jobManager.markFailed(jobId, reason);
-    final failedEvent = JobFailedEvent(
-      jobId: jobId,
-      userId: snapshot.userId,
-      sessionId: snapshot.sessionId,
-      source: snapshot.source,
-      reason: reason,
-    );
-    await _recordAll(failedEvent);
   }
 
   Future<void> _recordAll(KernelEvent event) async {

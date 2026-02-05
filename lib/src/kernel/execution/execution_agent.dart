@@ -90,7 +90,6 @@ class ExecutionAgentRunner {
         final sdk = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
         final session = await sdk.initSession(capability: template.capability);
         final task = UserTask(
-          taskId: _safeJobId(request.jobId),
           content: content,
           isChunk: true,
         );
@@ -151,13 +150,6 @@ class ExecutionAgentRunner {
       return [Content(type: ContentType.text, message: text)];
     }
     return [];
-  }
-
-  String _safeJobId(String id) {
-    if (id.length <= 36) {
-      return id;
-    }
-    return id.substring(0, 36);
   }
 
   String _messageToText(AgentMessage message) {

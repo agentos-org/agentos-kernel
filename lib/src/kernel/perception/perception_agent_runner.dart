@@ -38,6 +38,7 @@ class PerceptionAgentRunner {
   JobHandle submitRaw({
     required String source,
     required List<Content> content,
+    Map<String, dynamic>? data,
     String? userId,
     String? sessionId,
     String? jobId,
@@ -55,6 +56,7 @@ class PerceptionAgentRunner {
       sessionId: effectiveSessionId,
       source: source,
       content: content,
+      data: data,
     );
     _contexts[effectiveSessionId] = context;
     unawaited(_sendToAgent(context));
@@ -77,7 +79,6 @@ class PerceptionAgentRunner {
       run: (callContext) async {
         final session = await _getOrCreateSession(context.sessionId);
         final task = UserTask(
-          taskId: _safeJobId(context.jobId),
           content: context.content,
           isChunk: true,
         );
@@ -126,13 +127,6 @@ class PerceptionAgentRunner {
     final session = await sdk.initSession(capability: capability);
     _sessions[sessionId] = session;
     return session;
-  }
-
-  String _safeJobId(String id) {
-    if (id.length <= 36) {
-      return id;
-    }
-    return id.substring(0, 36);
   }
 
   String _defaultOpenToolJson() {
@@ -186,6 +180,7 @@ class _PerceptionContext {
   final String sessionId;
   final String source;
   final List<Content> content;
+  final Map<String, dynamic>? data;
 
   _PerceptionContext({
     required this.jobId,
@@ -193,6 +188,7 @@ class _PerceptionContext {
     required this.sessionId,
     required this.source,
     required this.content,
+    this.data,
   });
 }
 
@@ -231,6 +227,16 @@ class _PerceptionAgentHandler extends AgentMessageHandler {
       );
     }
     final target = payload['target'];
+    final mergedParams = <String, dynamic>{};
+    mergedParams.addAll(payload);
+    final extra = context.data;
+    if (extra != null && extra.isNotEmpty) {
+      extra.forEach((key, value) {
+        if (!mergedParams.containsKey(key)) {
+          mergedParams[key] = value;
+        }
+      });
+    }
     final rawInput = RawInput(
       jobId: context.jobId,
       userId: context.userId,
@@ -239,7 +245,7 @@ class _PerceptionAgentHandler extends AgentMessageHandler {
       data: {
         'action': action,
         if (target is String) 'target': target,
-        'params': payload,
+        'params': mergedParams,
       },
     );
     kernel.input(rawInput);

@@ -568,6 +568,7 @@ class KernelService {
       return runner.submitRaw(
         source: source,
         content: content,
+        data: data,
         userId: userId,
       );
     }

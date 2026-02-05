@@ -182,7 +182,6 @@ class LiteAgentPlanning extends Planning {
         );
         final session = await sdk.initSession(capability: capability);
         final task = UserTask(
-          taskId: _safeJobId(context.meta.id),
           content: [
             Content(type: ContentType.text, message: prompt),
           ],
@@ -414,12 +413,6 @@ class LiteAgentPlanning extends Planning {
     return jsonEncode(spec);
   }
 
-  String _safeJobId(String id) {
-    if (id.length <= 36) {
-      return id;
-    }
-    return id.substring(0, 36);
-  }
 }
 
 class _PlanningAgentHandler extends AgentMessageHandler {

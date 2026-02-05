@@ -29,7 +29,6 @@ class LiteAgentClient {
       ),
     );
     final task = UserTask(
-      taskId: _safeTaskId(context.meta.id),
       content: [
         Content(type: ContentType.text, message: userPrompt),
       ],
@@ -60,7 +59,6 @@ class LiteAgentClient {
       ),
     );
     final task = UserTask(
-      taskId: _safeTaskId(context.meta.id),
       content: [
         Content(type: ContentType.text, message: userPrompt),
       ],
@@ -97,13 +95,6 @@ class LiteAgentClient {
       message: message,
       text: _messageToText(message),
     );
-  }
-
-  String _safeTaskId(String id) {
-    if (id.length <= 36) {
-      return id;
-    }
-    return id.substring(0, 36);
   }
 
   String _messageToText(AgentMessage message) {
