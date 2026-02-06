@@ -29,7 +29,7 @@ class ExecutionAgentRegistry {
   final Map<String, ExecutionAgentTemplate> _byId;
 
   ExecutionAgentRegistry(List<ExecutionAgentTemplate> templates)
-      : _byId = {for (final template in templates) template.id: template};
+    : _byId = {for (final template in templates) template.id: template};
 
   ExecutionAgentTemplate? byId(String id) => _byId[id];
 
@@ -51,12 +51,14 @@ class ExecutionAgentRunner {
   final String? apiKey;
   final LlmQueue llmQueue;
   final ExecutionAgentRegistry registry;
+  final LLMConfig? Function()? getAvailableLlmConfig;
 
   ExecutionAgentRunner({
     required this.baseUrl,
     this.apiKey,
     required this.llmQueue,
     required this.registry,
+    this.getAvailableLlmConfig,
   });
 
   Future<ExecutionResult> run(ExecutionRequest request) async {
@@ -73,7 +75,13 @@ class ExecutionAgentRunner {
     if (content.isEmpty) {
       return ExecutionResult.fail('Missing content for execution_agent.');
     }
-    final llmConfig = template.capability.llmConfig;
+    final llmConfig =
+        template.capability.llmConfig ?? getAvailableLlmConfig?.call();
+    if (llmConfig == null) {
+      return ExecutionResult.fail(
+        'LLM config is required for execution_agent (agentId: $agentId).',
+      );
+    }
     final modelKey = buildLlmModelKey(
       baseUrl: llmConfig.baseUrl,
       model: llmConfig.model,
@@ -89,10 +97,7 @@ class ExecutionAgentRunner {
       run: (context) async {
         final sdk = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
         final session = await sdk.initSession(capability: template.capability);
-        final task = UserTask(
-          content: content,
-          isChunk: true,
-        );
+        final task = UserTask(content: content, isChunk: true);
         final completer = Completer<ExecutionResult>();
         AgentMessage? lastMessage;
         final handler = _ExecutionAgentHandler(
@@ -198,9 +203,8 @@ class _ExecutionAgentHandler extends AgentMessageHandler {
     }
     await directory.ensureLoaded();
     final toolId =
-        functionCall.arguments['toolId'] ?? directory.resolveToolIdForFunction(
-              functionCall.name,
-            );
+        functionCall.arguments['toolId'] ??
+        directory.resolveToolIdForFunction(functionCall.name);
     if (toolId is! String) {
       return ToolReturn(
         id: functionCall.id,
@@ -241,10 +245,7 @@ class _ExecutionAgentHandler extends AgentMessageHandler {
           completedAt: DateTime.now(),
         ),
       );
-      return ToolReturn(
-        id: toolReturn.id,
-        result: toolReturn.result,
-      );
+      return ToolReturn(id: toolReturn.id, result: toolReturn.result);
     } catch (error) {
       toolReporter?.call(
         ToolCallEvent(
@@ -260,10 +261,7 @@ class _ExecutionAgentHandler extends AgentMessageHandler {
       );
       return ToolReturn(
         id: functionCall.id,
-        result: {
-          'status': 'error',
-          'message': error.toString(),
-        },
+        result: {'status': 'error', 'message': error.toString()},
       );
     }
   }
