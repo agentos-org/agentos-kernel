@@ -61,6 +61,9 @@ dart run example/service_example.dart
 只读信息：
 - `getModelHealth()` → `Map<String, ModelHealthSnapshot>`
   - 获取模型可用性（仅在 AdaptiveSupervision 下生效）。
+- `getAvailableLlmConfig()` → `LLMConfig?`
+  - 获取当前可立即接入新请求的模型（综合健康状态 + 当前并发占用判断）。
+  - 若当前没有可用模型，返回 `null`。
 - `getExternalServiceHealth()` → `ExternalServiceHealthSnapshot`
   - 获取 LiteAgent/OpenTool/LLM 的健康状态快照。
 - `onExternalServiceHealthChange((ExternalServiceHealth) onChange)`
@@ -78,6 +81,8 @@ dart run example/service_example.dart
 `KernelServiceConfig` 支持一个模型列表（也可传 `null` 来禁用 LLM）。
 运行时会选择第一个“可用”的模型（基于 supervision 健康状态），
 如果首选模型不可用则自动降级到下一个模型。
+如果外部需要查询“此刻可接单”的模型，可使用 `getAvailableLlmConfig()`
+（健康状态 + 实时并发能力综合判断）。
 如果未提供 LLM 模型，依赖 LLM 的逻辑会抛出 `StateError`，
 直到调用 `updateLlmModels` 为止。
 

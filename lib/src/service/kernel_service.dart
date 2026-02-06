@@ -46,18 +46,13 @@ class LiteAgentConfig {
   final String baseUrl;
   final String? apiKey;
 
-  const LiteAgentConfig({
-    required this.baseUrl,
-    this.apiKey,
-  });
+  const LiteAgentConfig({required this.baseUrl, this.apiKey});
 }
 
 class LlmConfigGroup {
   final List<KernelLlmModel> models;
 
-  const LlmConfigGroup({
-    required this.models,
-  });
+  const LlmConfigGroup({required this.models});
 }
 
 class EmbeddingsConfig {
@@ -176,20 +171,20 @@ class KernelService {
     bool memorySummarizerStarted = false,
     _JobSnapshotDispatcher? jobSnapshotDispatcher,
     KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
-  })  : _perceptionRunner = perceptionRunner,
-        _llmConfigPool = llmConfigPool,
-        _perceptionSwitch = perceptionSwitch,
-        _planningSwitch = planningSwitch,
-        _learningSwitch = learningSwitch,
-        _liteAgentClient = liteAgentClient,
-        _llmQueue = llmQueue,
-        _openToolDirectory = openToolDirectory,
-        _logger = logger,
-        _driftMemory = driftMemory,
-        _memorySummarizerStarted = memorySummarizerStarted,
-        _jobSnapshotDispatcher =
-            jobSnapshotDispatcher ?? _JobSnapshotDispatcher(),
-        _runtimeConfig = runtimeConfig;
+  }) : _perceptionRunner = perceptionRunner,
+       _llmConfigPool = llmConfigPool,
+       _perceptionSwitch = perceptionSwitch,
+       _planningSwitch = planningSwitch,
+       _learningSwitch = learningSwitch,
+       _liteAgentClient = liteAgentClient,
+       _llmQueue = llmQueue,
+       _openToolDirectory = openToolDirectory,
+       _logger = logger,
+       _driftMemory = driftMemory,
+       _memorySummarizerStarted = memorySummarizerStarted,
+       _jobSnapshotDispatcher =
+           jobSnapshotDispatcher ?? _JobSnapshotDispatcher(),
+       _runtimeConfig = runtimeConfig;
 
   String get defaultUserId => _defaultUserId;
 
@@ -203,10 +198,7 @@ class KernelService {
     );
 
     final logger = ConsoleKernelLogger();
-    final llmQueue = LlmQueue(
-      supervision: supervision,
-      logger: logger,
-    );
+    final llmQueue = LlmQueue(supervision: supervision, logger: logger);
 
     final liteAgentClient = LiteAgentClient(
       baseUrl: config.liteAgent.baseUrl,
@@ -238,9 +230,8 @@ class KernelService {
       supervision.updateModelCatalog(llmModels);
       llmConfig = llmConfigPool.pick();
       llmConfigResolver = () => llmConfigPool!.pick(
-            isAvailable: (candidate) =>
-                _isModelAvailable(supervision, candidate),
-          );
+        isAvailable: (candidate) => _isModelAvailable(supervision, candidate),
+      );
       supervision.startLlmHealthMonitoring(llmModels);
     }
 
@@ -284,11 +275,12 @@ class KernelService {
     final memoryDbPath = config.runtime.memoryDbPath;
     final resolvedMemoryDbPath =
         (memoryDbPath == null || memoryDbPath.trim().isEmpty)
-            ? '.hive/kernel_memory.sqlite'
-            : memoryDbPath.trim();
+        ? '.hive/kernel_memory.sqlite'
+        : memoryDbPath.trim();
     final jobBox = await Hive.openBox<Map>(config.runtime.jobBoxName);
-    final preferenceBox =
-        await Hive.openBox<Map>(config.runtime.preferenceBoxName);
+    final preferenceBox = await Hive.openBox<Map>(
+      config.runtime.preferenceBoxName,
+    );
 
     final openToolDirectory = OpenToolDirectory();
 
@@ -298,8 +290,7 @@ class KernelService {
       vectorStore: vectorStore,
     );
 
-    final perceptionDelegateSwitch =
-        SwitchablePerception(ThrowingPerception());
+    final perceptionDelegateSwitch = SwitchablePerception(ThrowingPerception());
     final perception = ContextualPerception(
       delegate: perceptionDelegateSwitch,
       enrich: (input) async {
@@ -320,7 +311,10 @@ class KernelService {
               .where(
                 (match) =>
                     match.payload?['userId'] == targetUserId &&
-                    _isRelevantMatch(match, config.runtime.maxPreferenceDistance),
+                    _isRelevantMatch(
+                      match,
+                      config.runtime.maxPreferenceDistance,
+                    ),
               )
               .toList();
           if (filtered.isEmpty) {
@@ -331,10 +325,7 @@ class KernelService {
             'retrievedPreference': filtered
                 .take(config.runtime.maxPreferenceResults)
                 .map(
-                  (match) => {
-                    'score': match.score,
-                    'payload': match.payload,
-                  },
+                  (match) => {'score': match.score, 'payload': match.payload},
                 )
                 .toList(),
           };
@@ -517,15 +508,15 @@ class KernelService {
       throw ArgumentError('models is required.');
     }
     final configs = models
-      .map(
-        (model) => LLMConfig(
-          baseUrl: model.baseUrl,
-          apiKey: model.apiKey ?? '',
-          model: model.model,
-          contextWindowSize: model.contextWindowSize,
-        ),
-      )
-      .toList();
+        .map(
+          (model) => LLMConfig(
+            baseUrl: model.baseUrl,
+            apiKey: model.apiKey ?? '',
+            model: model.model,
+            contextWindowSize: model.contextWindowSize,
+          ),
+        )
+        .toList();
     var pool = _llmConfigPool;
     if (pool == null) {
       pool = LlmConfigPool(configs);
@@ -555,15 +546,16 @@ class KernelService {
     }
     final llmConfig = pool.pick();
     final llmConfigResolver = () => pool!.pick(
-          isAvailable: (candidate) =>
-              _isModelAvailable(_kernel.supervision, candidate),
-        );
+      isAvailable: (candidate) =>
+          _isModelAvailable(_kernel.supervision, candidate),
+    );
     perceptionSwitch.delegate = LiteAgentPerception(
       llmQueue: llmQueue,
       client: liteAgentClient,
       llmConfig: llmConfig,
       llmConfigResolver: llmConfigResolver,
-      systemPrompt: 'You are an intent extractor. Use emit_intent or reject_intent.',
+      systemPrompt:
+          'You are an intent extractor. Use emit_intent or reject_intent.',
       actionHints: const [
         'count',
         'create',
@@ -631,6 +623,42 @@ class KernelService {
     return const {};
   }
 
+  /// Pick the currently available LLM config for external callers.
+  ///
+  /// Availability is decided by supervision model health and current
+  /// per-model concurrency/load. Returns null when no model can take
+  /// new requests at the moment.
+  LLMConfig? getAvailableLlmConfig() {
+    final pool = _llmConfigPool;
+    if (pool == null || pool.configs.isEmpty) {
+      return null;
+    }
+    final queue = _llmQueue;
+    final supervision = _kernel.supervision;
+    for (final candidate in pool.configs) {
+      if (!_isModelAvailable(supervision, candidate)) {
+        continue;
+      }
+      if (queue == null) {
+        return candidate;
+      }
+      final modelKey = buildLlmModelKey(
+        baseUrl: candidate.baseUrl,
+        model: candidate.model,
+        apiKey: candidate.apiKey,
+      );
+      final snapshot = queue.snapshotForModel(modelKey);
+      final maxConcurrency = supervision.recommendedLlmConcurrency(
+        snapshot,
+        modelKey,
+      );
+      if (maxConcurrency > 0 && snapshot.inFlight < maxConcurrency) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
   ExternalServiceHealthSnapshot getExternalServiceHealth() {
     final supervision = _kernel.supervision;
     if (supervision is AdaptiveSupervision) {
@@ -672,7 +700,6 @@ class KernelService {
     return _kernel.preference.getSnapshot(userId: userId);
   }
 
-
   /// Suggest next action when there is no user input.
   ///
   /// [source] identifies the caller or channel.
@@ -689,8 +716,9 @@ class KernelService {
       userId: userId,
     );
     final directory = _resolveOpenToolDirectory();
-    final toolSummaries =
-        directory.isEmpty ? const [] : await directory.summaries();
+    final toolSummaries = directory.isEmpty
+        ? const []
+        : await directory.summaries();
     final recentRecords = _recentMemory(memorySnapshot.records, memoryLimit);
     final data = <String, dynamic>{
       'mode': 'suggestion',
@@ -710,11 +738,7 @@ class KernelService {
         'allowedActions': allowedActions,
     };
     final percept = await _kernel.perception.process(
-      RawInput(
-        userId: userId,
-        source: source,
-        data: data,
-      ),
+      RawInput(userId: userId, source: source, data: data),
     );
     final candidates = percept.candidates
         .map(
@@ -821,11 +845,7 @@ class KernelService {
     String? apiKey,
   }) {
     final directory = _resolveOpenToolDirectory();
-    return directory.registerRemote(
-      spec,
-      serverUrl: serverUrl,
-      apiKey: apiKey,
-    );
+    return directory.registerRemote(spec, serverUrl: serverUrl, apiKey: apiKey);
   }
 
   void updateAppInfoList(List<AppInfo> apps) {
@@ -898,10 +918,12 @@ class KernelService {
   }
 
   List<MemoryRecord> _recentMemory(List<MemoryRecord> records, int limit) {
-    final summaries =
-        records.where((record) => record.type == 'MEMORY_SUMMARY').toList();
-    final details =
-        records.where((record) => record.type != 'MEMORY_SUMMARY').toList();
+    final summaries = records
+        .where((record) => record.type == 'MEMORY_SUMMARY')
+        .toList();
+    final details = records
+        .where((record) => record.type != 'MEMORY_SUMMARY')
+        .toList();
     final detailSlice = (limit <= 0 || details.length <= limit)
         ? details
         : details.sublist(details.length - limit);
@@ -913,7 +935,6 @@ class KernelService {
     combined.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return combined;
   }
-
 
   AppCalledTool _ensureAppCalledTool() {
     final existing = _appCalledTool;

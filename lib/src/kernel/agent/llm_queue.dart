@@ -17,10 +17,7 @@ class LlmQueue {
   final Map<String, int> _inFlightByModel = {};
   Timer? _retryTimer;
 
-  LlmQueue({
-    required this.supervision,
-    this.logger,
-  });
+  LlmQueue({required this.supervision, this.logger});
 
   Future<T> enqueue<T>({
     required String purpose,
@@ -41,11 +38,7 @@ class LlmQueue {
       userId: userId,
     );
     final completer = Completer<T>();
-    final item = _LlmQueueItem<T>(
-      meta: meta,
-      run: run,
-      completer: completer,
-    );
+    final item = _LlmQueueItem<T>(meta: meta, run: run, completer: completer);
     _pending.add(item);
     supervision.onLlmEnqueued(meta);
     logger?.log(
@@ -65,6 +58,19 @@ class LlmQueue {
     return LlmQueueSnapshot(
       inFlight: _inFlight,
       queued: _pending.length,
+      totalInFlight: _inFlight,
+      totalQueued: _pending.length,
+    );
+  }
+
+  LlmQueueSnapshot snapshotForModel(String modelKey) {
+    final inFlightForModel = _inFlightByModel[modelKey] ?? 0;
+    final queuedForModel = _pending
+        .where((entry) => entry.meta.modelKey == modelKey)
+        .length;
+    return LlmQueueSnapshot(
+      inFlight: inFlightForModel,
+      queued: queuedForModel,
       totalInFlight: _inFlight,
       totalQueued: _pending.length,
     );
@@ -106,17 +112,12 @@ class LlmQueue {
     for (var i = 0; i < _pending.length; i++) {
       final item = _pending[i];
       final modelKey = item.meta.modelKey;
-      final inFlightForModel = _inFlightByModel[modelKey] ?? 0;
-      final queuedForModel =
-          _pending.where((entry) => entry.meta.modelKey == modelKey).length;
-      final snapshot = LlmQueueSnapshot(
-        inFlight: inFlightForModel,
-        queued: queuedForModel,
-        totalInFlight: _inFlight,
-        totalQueued: _pending.length,
+      final snapshot = snapshotForModel(modelKey);
+      final inFlightForModel = snapshot.inFlight;
+      final maxConcurrency = supervision.recommendedLlmConcurrency(
+        snapshot,
+        modelKey,
       );
-      final maxConcurrency =
-          supervision.recommendedLlmConcurrency(snapshot, modelKey);
       if (inFlightForModel < maxConcurrency) {
         return _pending.removeAt(i);
       }
@@ -201,7 +202,9 @@ class LlmQueue {
   }) {
     final doneAt = DateTime.now();
     final firstTokenAt = context.firstTokenAt;
-    final ttft = firstTokenAt == null ? null : firstTokenAt.difference(startedAt);
+    final ttft = firstTokenAt == null
+        ? null
+        : firstTokenAt.difference(startedAt);
     double? tps;
     if (firstTokenAt != null && context.totalTokens != null) {
       final elapsed = doneAt.difference(firstTokenAt).inMilliseconds;
@@ -244,12 +247,12 @@ class _LlmQueueItem<T> {
 
 class _LlmQueueEvent extends KernelEvent {
   _LlmQueueEvent(String type, LlmRequestMeta meta, {DateTime? timestamp})
-      : super(
-          type: type,
-          jobId: meta.jobId ?? meta.id,
-          userId: meta.userId,
-          sessionId: null,
-          source: 'llm_queue',
-          timestamp: timestamp ?? meta.enqueuedAt,
-        );
+    : super(
+        type: type,
+        jobId: meta.jobId ?? meta.id,
+        userId: meta.userId,
+        sessionId: null,
+        source: 'llm_queue',
+        timestamp: timestamp ?? meta.enqueuedAt,
+      );
 }

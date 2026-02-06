@@ -61,6 +61,9 @@ Model Configuration:
 Read-only Info:
 - `getModelHealth()` → `Map<String, ModelHealthSnapshot>`
   - Read model availability (only when AdaptiveSupervision is enabled).
+- `getAvailableLlmConfig()` → `LLMConfig?`
+  - Read the model that can accept a new request now (health + current model load/concurrency).
+  - Returns `null` when no model is currently available.
 - `getExternalServiceHealth()` → `ExternalServiceHealthSnapshot`
   - Read LiteAgent/OpenTool/LLM health snapshots.
 - `onExternalServiceHealthChange((ExternalServiceHealth) onChange)`
@@ -79,6 +82,8 @@ Read-only Info:
 `KernelServiceConfig` accepts a list of LLM models (or `null` to disable LLM).
 The runtime resolver picks the first available model (based on supervision health),
 so if the preferred model is unhealthy it falls back to the next model.
+For external callers that need the current runnable model, use
+`getAvailableLlmConfig()` (health + live concurrency check).
 If no LLM models are provided, LLM-dependent operations throw `StateError`
 until `updateLlmModels` is called.
 
