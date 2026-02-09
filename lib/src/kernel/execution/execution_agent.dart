@@ -47,15 +47,13 @@ class ExecutionAgentRegistry {
 }
 
 class ExecutionAgentRunner {
-  final String baseUrl;
-  final String? apiKey;
+  final LiteAgentSDK liteAgentSdk;
   final LlmQueue llmQueue;
   final ExecutionAgentRegistry registry;
   final LLMConfig? Function()? getAvailableLlmConfig;
 
   ExecutionAgentRunner({
-    required this.baseUrl,
-    this.apiKey,
+    required this.liteAgentSdk,
     required this.llmQueue,
     required this.registry,
     this.getAvailableLlmConfig,
@@ -95,8 +93,9 @@ class ExecutionAgentRunner {
       jobId: request.jobId,
       userId: request.context.userId,
       run: (context) async {
-        final sdk = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
-        final session = await sdk.initSession(capability: template.capability);
+        final session = await liteAgentSdk.initSession(
+          capability: template.capability,
+        );
         final task = UserTask(content: content, isChunk: true);
         final completer = Completer<ExecutionResult>();
         AgentMessage? lastMessage;
@@ -136,7 +135,7 @@ class ExecutionAgentRunner {
             );
           },
         );
-        await sdk.chat(session, task, handler);
+        await liteAgentSdk.chat(session, task, handler);
         return completer.future;
       },
     );

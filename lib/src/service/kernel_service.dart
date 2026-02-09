@@ -42,18 +42,6 @@ import '../kernel/supervision/model.dart';
 import '../kernel/supervision/supervision.dart';
 import 'dto.dart';
 
-class LiteAgentConfig {
-  final String baseUrl;
-  final String? apiKey;
-  final List<PresetOpenSpec>? presetOpenSpecList;
-
-  const LiteAgentConfig({
-    required this.baseUrl,
-    this.apiKey,
-    this.presetOpenSpecList,
-  });
-}
-
 class LlmConfigGroup {
   final List<KernelLlmModel> models;
 
@@ -129,13 +117,15 @@ class KernelRuntimeConfig {
 }
 
 class KernelServiceConfig {
-  final LiteAgentConfig liteAgent;
+  final LiteAgentSDK liteAgentSdk;
+  final List<PresetOpenSpec>? presetOpenSpecList;
   final LlmConfigGroup? llm;
   final EmbeddingsConfig embeddings;
   final KernelRuntimeConfig runtime;
 
   const KernelServiceConfig({
-    required this.liteAgent,
+    required this.liteAgentSdk,
+    this.presetOpenSpecList,
     this.llm,
     required this.embeddings,
     this.runtime = const KernelRuntimeConfig(),
@@ -205,16 +195,13 @@ class KernelService {
     final logger = ConsoleKernelLogger();
     final llmQueue = LlmQueue(supervision: supervision, logger: logger);
 
-    final liteAgentClient = LiteAgentClient(
-      baseUrl: config.liteAgent.baseUrl,
-      apiKey: config.liteAgent.apiKey,
-    );
-    final presetOpenSpecList = config.liteAgent.presetOpenSpecList;
+    final liteAgentClient = LiteAgentClient(sdk: config.liteAgentSdk);
+    final presetOpenSpecList = config.presetOpenSpecList;
     if (presetOpenSpecList != null) {
       await liteAgentClient.setPresetOpenSpecList(presetOpenSpecList);
     }
     supervision.startExternalServiceMonitoring(
-      liteAgentBaseUrl: config.liteAgent.baseUrl,
+      liteAgentSdk: config.liteAgentSdk,
       opentoolHost: config.runtime.opentoolDaemonHost,
       opentoolPort: config.runtime.opentoolDaemonPort,
       embeddingsBaseUrl: config.embeddings.baseUrl,

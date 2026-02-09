@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:agentos_kernel/agentos_kernel.dart';
+import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import 'mock_crud_tool.dart';
 
 Future<void> main() async {
@@ -13,12 +14,14 @@ Future<void> main() async {
   final embeddingsLlmModel = '<EMBEDDINGS_LLM_MODEL>'; // optional
 
   if (_isPlaceholder(liteAgentBaseUrl)) {
-    print('Please set LiteAgent config variables in example/service_example.dart');
+    print(
+      'Please set LiteAgent config variables in example/service_example.dart',
+    );
     return;
   }
   final service = await KernelService.create(
     KernelServiceConfig(
-      liteAgent: LiteAgentConfig(
+      liteAgentSdk: LiteAgentSDK(
         baseUrl: liteAgentBaseUrl,
         apiKey: _optionalValue(liteAgentApiKey),
       ),
@@ -50,7 +53,8 @@ Future<void> main() async {
   healthSubscription.cancel();
 }
 
-bool _isPlaceholder(String value) => value.startsWith('<') && value.endsWith('>');
+bool _isPlaceholder(String value) =>
+    value.startsWith('<') && value.endsWith('>');
 
 String? _optionalValue(String value) {
   if (value.trim().isEmpty || _isPlaceholder(value)) {

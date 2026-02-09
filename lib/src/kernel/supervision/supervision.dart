@@ -43,7 +43,8 @@ class PassiveSupervision implements Supervision {
   void onLlmCompleted(LlmCallMetrics metrics) {}
 
   @override
-  int recommendedLlmConcurrency(LlmQueueSnapshot snapshot, String modelKey) => 1;
+  int recommendedLlmConcurrency(LlmQueueSnapshot snapshot, String modelKey) =>
+      1;
 
   @override
   bool isSystemBusy() => false;
@@ -81,7 +82,7 @@ class AdaptiveSupervision implements Supervision {
   Timer? _openToolHealthTimer;
   Timer? _llmHealthTimer;
   Timer? _embeddingsHealthTimer;
-  String? _liteAgentBaseUrl;
+  LiteAgentSDK? _liteAgentSdk;
   String? _openToolHost;
   int? _openToolPort;
   String? _embeddingsBaseUrl;
@@ -112,18 +113,18 @@ class AdaptiveSupervision implements Supervision {
   @override
   SupervisionAdvice? observe(KernelEvent event) {
     if (event is ToolCallStartedEvent) {
-      _toolStats
-          .putIfAbsent(event.toolId, () => _ToolStats())
-          .onStart();
+      _toolStats.putIfAbsent(event.toolId, () => _ToolStats()).onStart();
     } else if (event is ToolCallDoneEvent) {
-      final duration =
-          event.completedAt.difference(event.startedAt).inMilliseconds;
+      final duration = event.completedAt
+          .difference(event.startedAt)
+          .inMilliseconds;
       _toolStats
           .putIfAbsent(event.toolId, () => _ToolStats())
           .onSuccess(duration);
     } else if (event is ToolCallFailedEvent) {
-      final duration =
-          event.completedAt.difference(event.startedAt).inMilliseconds;
+      final duration = event.completedAt
+          .difference(event.startedAt)
+          .inMilliseconds;
       _toolStats
           .putIfAbsent(event.toolId, () => _ToolStats())
           .onFailure(duration, event.error);
@@ -151,7 +152,10 @@ class AdaptiveSupervision implements Supervision {
   void onLlmCompleted(LlmCallMetrics metrics) {
     final modelKey = metrics.meta.modelKey;
     _updateModelHealth(metrics);
-    final recent = _recentByModel.putIfAbsent(modelKey, () => <LlmCallMetrics>[]);
+    final recent = _recentByModel.putIfAbsent(
+      modelKey,
+      () => <LlmCallMetrics>[],
+    );
     recent.add(metrics);
     if (recent.length > windowSize) {
       recent.removeAt(0);
@@ -166,8 +170,10 @@ class AdaptiveSupervision implements Supervision {
     if (!_isModelAvailable(modelKey)) {
       return 0;
     }
-    final limit =
-        (_currentLimitByModel[modelKey] ?? 1).clamp(1, maxConcurrency);
+    final limit = (_currentLimitByModel[modelKey] ?? 1).clamp(
+      1,
+      maxConcurrency,
+    );
     final cap = _modelConcurrencyCap(modelKey);
     if (snapshot.inFlight == 0) {
       return _applyConcurrencyCap(limit, cap);
@@ -195,8 +201,7 @@ class AdaptiveSupervision implements Supervision {
     if (ttftValues.isEmpty || tpsValues.isEmpty) {
       return;
     }
-    final avgTtft =
-        ttftValues.reduce((a, b) => a + b) / ttftValues.length;
+    final avgTtft = ttftValues.reduce((a, b) => a + b) / ttftValues.length;
     final avgTps = tpsValues.reduce((a, b) => a + b) / tpsValues.length;
 
     final current = _currentLimitByModel[modelKey] ?? 1;
@@ -204,8 +209,10 @@ class AdaptiveSupervision implements Supervision {
       _currentLimitByModel[modelKey] = (current + 1).clamp(1, maxConcurrency);
       return;
     }
-    _currentLimitByModel[modelKey] =
-        (current / 2).ceil().clamp(1, maxConcurrency);
+    _currentLimitByModel[modelKey] = (current / 2).ceil().clamp(
+      1,
+      maxConcurrency,
+    );
   }
 
   Map<String, ToolStatsSnapshot> toolStatsSnapshot() {
@@ -248,12 +255,12 @@ class AdaptiveSupervision implements Supervision {
   }
 
   void startExternalServiceMonitoring({
-    required String liteAgentBaseUrl,
+    required LiteAgentSDK liteAgentSdk,
     String? opentoolHost,
     int? opentoolPort,
     String? embeddingsBaseUrl,
   }) {
-    _liteAgentBaseUrl = liteAgentBaseUrl;
+    _liteAgentSdk = liteAgentSdk;
     _openToolHost = opentoolHost;
     _openToolPort = opentoolPort;
     _embeddingsBaseUrl = embeddingsBaseUrl;
@@ -366,8 +373,10 @@ class AdaptiveSupervision implements Supervision {
     if (_liteAgentHealthTimer != null) {
       return;
     }
-    _liteAgentHealthTimer =
-        Timer.periodic(_healthInterval, (_) => _checkLiteAgentHealth());
+    _liteAgentHealthTimer = Timer.periodic(
+      _healthInterval,
+      (_) => _checkLiteAgentHealth(),
+    );
     unawaited(_checkLiteAgentHealth());
   }
 
@@ -375,8 +384,10 @@ class AdaptiveSupervision implements Supervision {
     if (_openToolHealthTimer != null) {
       return;
     }
-    _openToolHealthTimer =
-        Timer.periodic(_healthInterval, (_) => _checkOpenToolHealth());
+    _openToolHealthTimer = Timer.periodic(
+      _healthInterval,
+      (_) => _checkOpenToolHealth(),
+    );
     unawaited(_checkOpenToolHealth());
   }
 
@@ -384,8 +395,7 @@ class AdaptiveSupervision implements Supervision {
     if (_llmHealthTimer != null) {
       return;
     }
-    _llmHealthTimer =
-        Timer.periodic(_healthInterval, (_) => _checkLlmHealth());
+    _llmHealthTimer = Timer.periodic(_healthInterval, (_) => _checkLlmHealth());
     unawaited(_checkLlmHealth());
   }
 
@@ -393,8 +403,10 @@ class AdaptiveSupervision implements Supervision {
     if (_embeddingsHealthTimer != null) {
       return;
     }
-    _embeddingsHealthTimer =
-        Timer.periodic(_healthInterval, (_) => _checkEmbeddingsHealth());
+    _embeddingsHealthTimer = Timer.periodic(
+      _healthInterval,
+      (_) => _checkEmbeddingsHealth(),
+    );
     unawaited(_checkEmbeddingsHealth());
   }
 
@@ -402,15 +414,14 @@ class AdaptiveSupervision implements Supervision {
     if (_liteAgentHealthInFlight) {
       return;
     }
-    final baseUrl = _liteAgentBaseUrl;
-    if (baseUrl == null || baseUrl.trim().isEmpty) {
+    final liteAgentSdk = _liteAgentSdk;
+    if (liteAgentSdk == null) {
       return;
     }
     _liteAgentHealthInFlight = true;
     final id = 'liteagent';
     try {
-      final liteagent = LiteAgentSDK(baseUrl: baseUrl.trim());
-      final version = await liteagent.getVersion();
+      final version = await liteAgentSdk.getVersion();
       _recordExternalHealth(
         ExternalServiceHealth(
           id: id,
@@ -418,7 +429,6 @@ class AdaptiveSupervision implements Supervision {
           available: true,
           version: version.version,
           lastSuccessAt: DateTime.now(),
-          endpoint: baseUrl.trim(),
         ),
       );
     } catch (error) {
@@ -429,7 +439,6 @@ class AdaptiveSupervision implements Supervision {
           available: false,
           lastFailureAt: DateTime.now(),
           message: error.toString(),
-          endpoint: baseUrl.trim(),
         ),
       );
     } finally {
@@ -451,8 +460,7 @@ class AdaptiveSupervision implements Supervision {
         port: port ?? DAEMON_DEFAULT_PORT,
       );
       final version = await client.getVersion();
-      final endpoint =
-          'http://${client.host}:${client.port}${client.prefix}';
+      final endpoint = 'http://${client.host}:${client.port}${client.prefix}';
       _recordExternalHealth(
         ExternalServiceHealth(
           id: id,
@@ -489,9 +497,7 @@ class AdaptiveSupervision implements Supervision {
     _embeddingsHealthInFlight = true;
     final id = 'embeddings';
     try {
-      final client = embeddings.LiteEmbeddingsClient(
-        baseUrl: baseUrl.trim(),
-      );
+      final client = embeddings.LiteEmbeddingsClient(baseUrl: baseUrl.trim());
       final version = await client.getVersion();
       _recordExternalHealth(
         ExternalServiceHealth(
@@ -577,7 +583,8 @@ class AdaptiveSupervision implements Supervision {
   void _recordExternalHealth(ExternalServiceHealth health) {
     final existing = _externalHealth[health.id];
     _externalHealth[health.id] = health;
-    final shouldNotify = existing == null ||
+    final shouldNotify =
+        existing == null ||
         existing.available != health.available ||
         existing.version != health.version ||
         existing.message != health.message ||

@@ -5,17 +5,15 @@ import '../logging/logger.dart';
 import 'model.dart';
 
 class LiteAgentClient {
-  final String baseUrl;
-  final String? apiKey;
+  final LiteAgentSDK sdk;
   final KernelLogger? logger;
 
-  LiteAgentClient({required this.baseUrl, this.apiKey, this.logger});
+  LiteAgentClient({required this.sdk, this.logger});
 
   Future<void> setPresetOpenSpecList(
     List<PresetOpenSpec> presetOpenSpecList,
   ) async {
-    final liteagent = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
-    await liteagent.setPresetOpenSpecList(presetOpenSpecList);
+    await sdk.setPresetOpenSpecList(presetOpenSpecList);
   }
 
   Future<LiteAgentResponse> chatSimple({
@@ -24,15 +22,14 @@ class LiteAgentClient {
     required String userPrompt,
     required LlmCallContext context,
   }) async {
-    final liteagent = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
-    final session = await liteagent.initSimple(
+    final session = await sdk.initSimple(
       SimpleCapability(llmConfig: llmConfig, systemPrompt: systemPrompt),
     );
     final task = UserTask(
       content: [Content(type: ContentType.text, message: userPrompt)],
       isChunk: true,
     );
-    final message = await liteagent.chatSimple(session, task);
+    final message = await sdk.chatSimple(session, task);
     final usage = message.completions?.usage;
     final totalTokens = usage?.totalTokens;
     if (totalTokens != null) {
@@ -51,8 +48,7 @@ class LiteAgentClient {
     required String userPrompt,
     required LlmCallContext context,
   }) async {
-    final liteagent = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
-    final session = await liteagent.initSimple(
+    final session = await sdk.initSimple(
       SimpleCapability(llmConfig: llmConfig, systemPrompt: systemPrompt),
     );
     final task = UserTask(
@@ -80,7 +76,7 @@ class LiteAgentClient {
         completer.completeError(error);
       },
     );
-    await liteagent.chat(session, task, handler);
+    await sdk.chat(session, task, handler);
     final message = await completer.future;
     final usage = message.completions?.usage;
     final totalTokens = usage?.totalTokens;

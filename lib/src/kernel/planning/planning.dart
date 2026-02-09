@@ -47,9 +47,7 @@ class SwitchablePlanning implements Planning {
 class ThrowingPlanning implements Planning {
   final String message;
 
-  ThrowingPlanning({
-    this.message = 'LLM models not configured.',
-  });
+  ThrowingPlanning({this.message = 'LLM models not configured.'});
 
   @override
   Future<PlanResult> create(
@@ -185,8 +183,8 @@ class LiteAgentPlanning extends Planning {
     this.memoryLimit = 5,
     OpenToolDirectory? openToolDirectory,
     List<ExecutionAgentTemplate>? executionAgents,
-  })  : openToolDirectory = openToolDirectory ?? OpenToolDirectory(),
-        executionAgents = executionAgents ?? const [];
+  }) : openToolDirectory = openToolDirectory ?? OpenToolDirectory(),
+       executionAgents = executionAgents ?? const [];
 
   @override
   Future<PlanResult> create(
@@ -207,22 +205,15 @@ class LiteAgentPlanning extends Planning {
       weight: 5,
       modelKey: modelKey,
       run: (context) async {
-        final sdk = LiteAgentSDK(
-          baseUrl: client.baseUrl,
-          apiKey: client.apiKey,
-        );
+        final sdk = client.sdk;
         final capability = Capability(
           llmConfig: effectiveConfig,
           systemPrompt: systemPrompt,
-          callbackOpenTool: CallbackOpenTool(
-            opentool: _planningToolSpecJson(),
-          ),
+          callbackOpenTool: CallbackOpenTool(opentool: _planningToolSpecJson()),
         );
         final session = await sdk.initSession(capability: capability);
         final task = UserTask(
-          content: [
-            Content(type: ContentType.text, message: prompt),
-          ],
+          content: [Content(type: ContentType.text, message: prompt)],
           isChunk: true,
         );
         final completer = Completer<PlanResult>();
@@ -261,7 +252,9 @@ class LiteAgentPlanning extends Planning {
     PreferenceSnapshot preference,
   ) async {
     final buffer = StringBuffer();
-    buffer.writeln('You are planning the next action based on intent candidates.');
+    buffer.writeln(
+      'You are planning the next action based on intent candidates.',
+    );
     buffer.writeln('You must call exactly one planning tool function.');
     buffer.writeln('If no action should be taken, call plan_reject.');
     buffer.writeln('Candidates:');
@@ -317,10 +310,12 @@ class LiteAgentPlanning extends Planning {
   }
 
   List<MemoryRecord> _recentRecords(List<MemoryRecord> records) {
-    final summaries =
-        records.where((record) => record.type == 'MEMORY_SUMMARY').toList();
-    final details =
-        records.where((record) => record.type != 'MEMORY_SUMMARY').toList();
+    final summaries = records
+        .where((record) => record.type == 'MEMORY_SUMMARY')
+        .toList();
+    final details = records
+        .where((record) => record.type != 'MEMORY_SUMMARY')
+        .toList();
     final detailSlice = (memoryLimit <= 0 || details.length <= memoryLimit)
         ? details
         : details.sublist(details.length - memoryLimit);
@@ -451,7 +446,6 @@ class LiteAgentPlanning extends Planning {
     };
     return jsonEncode(spec);
   }
-
 }
 
 void _recordTokenUsage(AgentMessage message, LlmCallContext context) {
@@ -494,17 +488,11 @@ class _PlanningAgentHandler extends AgentMessageHandler {
       case 'plan_open_tool':
         final plan = _planOpenTool(args);
         onPlan(plan);
-        return ToolReturn(
-          id: functionCall.id,
-          result: {'status': 'accepted'},
-        );
+        return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
       case 'plan_execution_agent':
         final plan = _planExecutionAgent(args);
         onPlan(plan);
-        return ToolReturn(
-          id: functionCall.id,
-          result: {'status': 'accepted'},
-        );
+        return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
       case 'plan_reject':
         final plan = PlanResult(
           intent: null,
@@ -514,10 +502,7 @@ class _PlanningAgentHandler extends AgentMessageHandler {
               : 'Plan rejected.',
         );
         onPlan(plan);
-        return ToolReturn(
-          id: functionCall.id,
-          result: {'status': 'accepted'},
-        );
+        return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
       default:
         return ToolReturn(
           id: functionCall.id,

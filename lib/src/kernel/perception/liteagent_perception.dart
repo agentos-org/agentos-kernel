@@ -51,10 +51,7 @@ class LiteAgentPerception implements Perception {
         jobId: input.jobId,
         userId: input.userId,
         run: (context) async {
-          final sdk = LiteAgentSDK(
-            baseUrl: client.baseUrl,
-            apiKey: client.apiKey,
-          );
+          final sdk = client.sdk;
           final capability = Capability(
             llmConfig: effectiveConfig,
             systemPrompt: systemPrompt,
@@ -64,9 +61,7 @@ class LiteAgentPerception implements Perception {
           );
           final session = await sdk.initSession(capability: capability);
           final task = UserTask(
-            content: [
-              Content(type: ContentType.text, message: prompt),
-            ],
+            content: [Content(type: ContentType.text, message: prompt)],
             isChunk: true,
           );
           final completer = Completer<CandidateIntent?>();
@@ -91,10 +86,7 @@ class LiteAgentPerception implements Perception {
       if (candidate == null) {
         return await _fallback(input);
       }
-      return Percept(
-        candidates: [candidate],
-        confidence: candidate.confidence,
-      );
+      return Percept(candidates: [candidate], confidence: candidate.confidence);
     } catch (_) {
       return await _fallback(input);
     }
@@ -212,7 +204,6 @@ class LiteAgentPerception implements Perception {
     };
     return jsonEncode(spec);
   }
-
 }
 
 void _recordTokenUsage(AgentMessage message, LlmCallContext context) {
@@ -263,10 +254,7 @@ class _PerceptionToolHandler extends AgentMessageHandler {
         );
       case 'reject_intent':
         onCandidate(null);
-        return ToolReturn(
-          id: functionCall.id,
-          result: {'status': 'accepted'},
-        );
+        return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
       default:
         return ToolReturn(
           id: functionCall.id,

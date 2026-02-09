@@ -14,8 +14,7 @@ import '../job_manager.dart';
 class PerceptionAgentRunner {
   final Kernel kernel;
   final LlmQueue llmQueue;
-  final String baseUrl;
-  final String? apiKey;
+  final LiteAgentSDK liteAgentSdk;
   final LLMConfig llmConfig;
   final String systemPrompt;
   final KernelLogger? logger;
@@ -27,10 +26,9 @@ class PerceptionAgentRunner {
   PerceptionAgentRunner({
     required this.kernel,
     required this.llmQueue,
-    required this.baseUrl,
+    required this.liteAgentSdk,
     required this.llmConfig,
     required this.systemPrompt,
-    this.apiKey,
     this.logger,
     this.openToolJson,
   });
@@ -78,19 +76,16 @@ class PerceptionAgentRunner {
       userId: context.userId,
       run: (callContext) async {
         final session = await _getOrCreateSession(context.sessionId);
-        final task = UserTask(
-          content: context.content,
-          isChunk: true,
-        );
+        final task = UserTask(content: context.content, isChunk: true);
         final handler = _PerceptionAgentHandler(
           context: context,
           kernel: kernel,
           onFirstToken: callContext.markFirstToken,
-          onMessageCallback: (message) => _recordTokenUsage(message, callContext),
+          onMessageCallback: (message) =>
+              _recordTokenUsage(message, callContext),
           logger: logger,
         );
-        await LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey)
-            .chat(session, task, handler);
+        await liteAgentSdk.chat(session, task, handler);
         return null;
       },
     );
@@ -124,8 +119,7 @@ class PerceptionAgentRunner {
         opentool: openToolJson ?? _defaultOpenToolJson(),
       ),
     );
-    final sdk = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
-    final session = await sdk.initSession(capability: capability);
+    final session = await liteAgentSdk.initSession(capability: capability);
     _sessions[sessionId] = session;
     return session;
   }
@@ -281,7 +275,10 @@ class _PerceptionAgentHandler extends AgentMessageHandler {
   }
 
   @override
-  Future<void> onChunk(String sessionId, AgentMessageChunk agentMessageChunk) async {
+  Future<void> onChunk(
+    String sessionId,
+    AgentMessageChunk agentMessageChunk,
+  ) async {
     onFirstToken();
   }
 

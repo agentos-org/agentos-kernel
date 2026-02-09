@@ -50,10 +50,7 @@ class LiteAgentLearning implements Learning {
         modelKey: modelKey,
         jobId: record.jobId,
         run: (context) async {
-          final sdk = LiteAgentSDK(
-            baseUrl: client.baseUrl,
-            apiKey: client.apiKey,
-          );
+          final sdk = client.sdk;
           final capability = Capability(
             llmConfig: effectiveConfig,
             systemPrompt: systemPrompt,
@@ -63,9 +60,7 @@ class LiteAgentLearning implements Learning {
           );
           final session = await sdk.initSession(capability: capability);
           final task = UserTask(
-            content: [
-              Content(type: ContentType.text, message: prompt),
-            ],
+            content: [Content(type: ContentType.text, message: prompt)],
             isChunk: true,
           );
           final completer = Completer<PreferenceSignal?>();
@@ -152,7 +147,6 @@ class LiteAgentLearning implements Learning {
     };
     return jsonEncode(spec);
   }
-
 }
 
 void _recordTokenUsage(AgentMessage message, LlmCallContext context) {
@@ -205,10 +199,7 @@ class _LearningToolHandler extends AgentMessageHandler {
         );
       case 'reject_preference':
         onSignal(null);
-        return ToolReturn(
-          id: functionCall.id,
-          result: {'status': 'accepted'},
-        );
+        return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
       default:
         return ToolReturn(
           id: functionCall.id,
