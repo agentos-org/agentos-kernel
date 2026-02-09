@@ -57,6 +57,8 @@ Tools (Planning/Execution):
 Model Configuration:
 - `updateLlmModels(List<KernelLlmModel>)`
   - Replace the LLM model list (and enable LLM components if they were not configured).
+- `setPresetOpenSpecList(List<PresetOpenSpec>)`
+  - Update LiteAgent preset OpenSpec list (called explicitly by external code after init).
 
 Read-only Info:
 - `getModelHealth()` → `Map<String, ModelHealthSnapshot>`
@@ -134,6 +136,7 @@ final service = await KernelService.create(
     liteAgent: LiteAgentConfig(
       baseUrl: '<LITEAGENT_BASE_URL>',
       apiKey: '<LITEAGENT_API_KEY>', // optional
+      presetOpenSpecList: const [], // optional
     ),
     llm: LlmConfigGroup(
       models: const [

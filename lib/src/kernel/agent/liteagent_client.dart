@@ -9,11 +9,14 @@ class LiteAgentClient {
   final String? apiKey;
   final KernelLogger? logger;
 
-  LiteAgentClient({
-    required this.baseUrl,
-    this.apiKey,
-    this.logger,
-  });
+  LiteAgentClient({required this.baseUrl, this.apiKey, this.logger});
+
+  Future<void> setPresetOpenSpecList(
+    List<PresetOpenSpec> presetOpenSpecList,
+  ) async {
+    final liteagent = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
+    await liteagent.setPresetOpenSpecList(presetOpenSpecList);
+  }
 
   Future<LiteAgentResponse> chatSimple({
     required LLMConfig llmConfig,
@@ -23,15 +26,10 @@ class LiteAgentClient {
   }) async {
     final liteagent = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
     final session = await liteagent.initSimple(
-      SimpleCapability(
-        llmConfig: llmConfig,
-        systemPrompt: systemPrompt,
-      ),
+      SimpleCapability(llmConfig: llmConfig, systemPrompt: systemPrompt),
     );
     final task = UserTask(
-      content: [
-        Content(type: ContentType.text, message: userPrompt),
-      ],
+      content: [Content(type: ContentType.text, message: userPrompt)],
       isChunk: true,
     );
     final message = await liteagent.chatSimple(session, task);
@@ -44,10 +42,7 @@ class LiteAgentClient {
     if (contextUsageRatio != null) {
       context.setContextUsageRatio(contextUsageRatio.toDouble());
     }
-    return LiteAgentResponse(
-      message: message,
-      text: _messageToText(message),
-    );
+    return LiteAgentResponse(message: message, text: _messageToText(message));
   }
 
   Future<LiteAgentResponse> chatStreaming({
@@ -58,15 +53,10 @@ class LiteAgentClient {
   }) async {
     final liteagent = LiteAgentSDK(baseUrl: baseUrl, apiKey: apiKey);
     final session = await liteagent.initSimple(
-      SimpleCapability(
-        llmConfig: llmConfig,
-        systemPrompt: systemPrompt,
-      ),
+      SimpleCapability(llmConfig: llmConfig, systemPrompt: systemPrompt),
     );
     final task = UserTask(
-      content: [
-        Content(type: ContentType.text, message: userPrompt),
-      ],
+      content: [Content(type: ContentType.text, message: userPrompt)],
       isChunk: true,
     );
     final completer = Completer<AgentMessage>();
@@ -101,10 +91,7 @@ class LiteAgentClient {
     if (contextUsageRatio != null) {
       context.setContextUsageRatio(contextUsageRatio.toDouble());
     }
-    return LiteAgentResponse(
-      message: message,
-      text: _messageToText(message),
-    );
+    return LiteAgentResponse(message: message, text: _messageToText(message));
   }
 
   String _messageToText(AgentMessage message) {
@@ -124,10 +111,7 @@ class LiteAgentResponse {
   final AgentMessage message;
   final String text;
 
-  const LiteAgentResponse({
-    required this.message,
-    required this.text,
-  });
+  const LiteAgentResponse({required this.message, required this.text});
 }
 
 class _LiteAgentMessageHandler extends AgentMessageHandler {
@@ -141,13 +125,16 @@ class _LiteAgentMessageHandler extends AgentMessageHandler {
     required void Function(AgentMessage message) onMessage,
     required void Function() onDone,
     required void Function(Exception error) onError,
-  })  : _onChunk = onChunk,
-        _onMessage = onMessage,
-        _onDone = onDone,
-        _onError = onError;
+  }) : _onChunk = onChunk,
+       _onMessage = onMessage,
+       _onDone = onDone,
+       _onError = onError;
 
   @override
-  Future<void> onChunk(String sessionId, AgentMessageChunk agentMessageChunk) async {
+  Future<void> onChunk(
+    String sessionId,
+    AgentMessageChunk agentMessageChunk,
+  ) async {
     _onChunk();
   }
 

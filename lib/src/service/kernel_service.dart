@@ -45,8 +45,13 @@ import 'dto.dart';
 class LiteAgentConfig {
   final String baseUrl;
   final String? apiKey;
+  final List<PresetOpenSpec>? presetOpenSpecList;
 
-  const LiteAgentConfig({required this.baseUrl, this.apiKey});
+  const LiteAgentConfig({
+    required this.baseUrl,
+    this.apiKey,
+    this.presetOpenSpecList,
+  });
 }
 
 class LlmConfigGroup {
@@ -204,6 +209,10 @@ class KernelService {
       baseUrl: config.liteAgent.baseUrl,
       apiKey: config.liteAgent.apiKey,
     );
+    final presetOpenSpecList = config.liteAgent.presetOpenSpecList;
+    if (presetOpenSpecList != null) {
+      await liteAgentClient.setPresetOpenSpecList(presetOpenSpecList);
+    }
     supervision.startExternalServiceMonitoring(
       liteAgentBaseUrl: config.liteAgent.baseUrl,
       opentoolHost: config.runtime.opentoolDaemonHost,
@@ -501,6 +510,16 @@ class KernelService {
       timestamp: agentMessage.createTime,
     );
     await _kernel.memory.record(record);
+  }
+
+  Future<void> setPresetOpenSpecList(
+    List<PresetOpenSpec> presetOpenSpecList,
+  ) async {
+    final liteAgentClient = _liteAgentClient;
+    if (liteAgentClient == null) {
+      throw StateError('LiteAgent client is not managed by KernelService.');
+    }
+    await liteAgentClient.setPresetOpenSpecList(presetOpenSpecList);
   }
 
   void updateLlmModels(List<KernelLlmModel> models) {

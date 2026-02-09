@@ -57,6 +57,8 @@ dart run example/service_example.dart
 模型配置：
 - `updateLlmModels(List<KernelLlmModel>)`
   - 替换 LLM 模型列表（若之前未配置 LLM，将启用 LLM 组件）。
+- `setPresetOpenSpecList(List<PresetOpenSpec>)`
+  - 更新 LiteAgent 的预置 OpenSpec 列表（初始化后由外部显式调用）。
 
 只读信息：
 - `getModelHealth()` → `Map<String, ModelHealthSnapshot>`
@@ -133,6 +135,7 @@ final service = await KernelService.create(
     liteAgent: LiteAgentConfig(
       baseUrl: '<LITEAGENT_BASE_URL>',
       apiKey: '<LITEAGENT_API_KEY>', // optional
+      presetOpenSpecList: const [], // optional
     ),
     llm: LlmConfigGroup(
       models: const [
