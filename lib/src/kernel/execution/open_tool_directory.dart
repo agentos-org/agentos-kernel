@@ -18,19 +18,10 @@ class OpenToolDirectory {
   bool get isEmpty => _byId.isEmpty && _localTools.isEmpty;
 
   void registerLocal(ot.Tool handler, {String? toolId}) {
-    _localTools.add(
-      _LocalToolEntry(
-        handler: handler,
-        preferredId: toolId,
-      ),
-    );
+    _localTools.add(_LocalToolEntry(handler: handler, preferredId: toolId));
   }
 
-  void updateLocalToolSpec(
-    ot.Tool handler,
-    OpenTool spec, {
-    String? toolId,
-  }) {
+  void updateLocalToolSpec(ot.Tool handler, OpenTool spec, {String? toolId}) {
     _LocalToolEntry? entry;
     for (final item in _localTools) {
       if (item.handler == handler) {
@@ -42,9 +33,8 @@ class OpenToolDirectory {
       registerLocal(handler, toolId: toolId);
       entry = _localTools.last;
     }
-    final resolvedId = toolId ??
-        entry.preferredId ??
-        _resolveToolId(spec, entry.preferredId);
+    final resolvedId =
+        toolId ?? entry.preferredId ?? _resolveToolId(spec, entry.preferredId);
     if (entry.toolId != null && entry.toolId != resolvedId) {
       _byId.remove(entry.toolId);
       _localHandlers.remove(entry.toolId);
@@ -75,6 +65,29 @@ class OpenToolDirectory {
     }
     _indexFunctions(id, tool.functions);
     return id;
+  }
+
+  bool updateRemoteEndpoint(
+    String toolId, {
+    String? serverUrl,
+    String? apiKey,
+  }) {
+    if (!_byId.containsKey(toolId)) {
+      return false;
+    }
+    if (serverUrl != null && serverUrl.trim().isNotEmpty) {
+      _serverUrls[toolId] = serverUrl.trim();
+    }
+    if (apiKey != null) {
+      final trimmed = apiKey.trim();
+      if (trimmed.isEmpty) {
+        _apiKeys.remove(toolId);
+      } else {
+        _apiKeys[toolId] = trimmed;
+      }
+    }
+    _clients.remove(toolId);
+    return true;
   }
 
   OpenTool? byId(String id) => _byId[id];
@@ -231,8 +244,5 @@ class _LocalToolEntry {
   OpenTool? spec;
   Future<OpenTool?>? loading;
 
-  _LocalToolEntry({
-    required this.handler,
-    this.preferredId,
-  });
+  _LocalToolEntry({required this.handler, this.preferredId});
 }

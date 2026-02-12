@@ -5,10 +5,16 @@ import '../logging/logger.dart';
 import 'model.dart';
 
 class LiteAgentClient {
-  final LiteAgentSDK sdk;
+  LiteAgentSDK _sdk;
   final KernelLogger? logger;
 
-  LiteAgentClient({required this.sdk, this.logger});
+  LiteAgentClient({required LiteAgentSDK sdk, this.logger}) : _sdk = sdk;
+
+  LiteAgentSDK get sdk => _sdk;
+
+  set sdk(LiteAgentSDK value) {
+    _sdk = value;
+  }
 
   Future<void> setPresetOpenSpecList(
     List<PresetOpenSpec> presetOpenSpecList,

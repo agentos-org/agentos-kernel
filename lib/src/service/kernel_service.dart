@@ -36,6 +36,7 @@ import '../kernel/perception/perception.dart';
 import '../kernel/perception/perception_agent_runner.dart';
 import '../kernel/planning/planning.dart';
 import '../kernel/preference/hive_preference.dart';
+import '../kernel/preference/preference.dart';
 import '../kernel/preference/lite_embeddings_vector_store.dart';
 import '../kernel/preference/vector_store.dart';
 import '../kernel/supervision/model.dart';
@@ -132,6 +133,38 @@ class KernelServiceConfig {
   });
 }
 
+class KernelReadiness {
+  final bool ready;
+  final bool llmConfigured;
+  final bool llmServicesReady;
+  final bool liteAgentReady;
+  final bool openToolDaemonReady;
+  final bool embeddingsReady;
+  final List<String> reasons;
+
+  const KernelReadiness({
+    required this.ready,
+    required this.llmConfigured,
+    required this.llmServicesReady,
+    required this.liteAgentReady,
+    required this.openToolDaemonReady,
+    required this.embeddingsReady,
+    required this.reasons,
+  });
+}
+
+class _LlmServiceDelegates {
+  final Perception perception;
+  final Planning planning;
+  final Learning learning;
+
+  const _LlmServiceDelegates({
+    required this.perception,
+    required this.planning,
+    required this.learning,
+  });
+}
+
 class KernelService {
   final Kernel _kernel;
   final PerceptionAgentRunner? _perceptionRunner;
@@ -145,10 +178,14 @@ class KernelService {
   final OpenToolDirectory? _openToolDirectory;
   final KernelLogger? _logger;
   final DriftMemory? _driftMemory;
+  final SwitchableTextQueryVectorStore? _preferenceVectorStore;
   bool _memorySummarizerStarted;
   final _JobSnapshotDispatcher _jobSnapshotDispatcher;
   AppCalledTool? _appCalledTool;
   final KernelRuntimeConfig _runtimeConfig;
+  String _opentoolDaemonHost;
+  int _opentoolDaemonPort;
+  String _embeddingsBaseUrl;
 
   /// Wraps the kernel with a simplified API for external callers.
   KernelService(
@@ -163,9 +200,13 @@ class KernelService {
     OpenToolDirectory? openToolDirectory,
     KernelLogger? logger,
     DriftMemory? driftMemory,
+    SwitchableTextQueryVectorStore? preferenceVectorStore,
     bool memorySummarizerStarted = false,
     _JobSnapshotDispatcher? jobSnapshotDispatcher,
     KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
+    String? opentoolDaemonHost,
+    int? opentoolDaemonPort,
+    String embeddingsBaseUrl = '',
   }) : _perceptionRunner = perceptionRunner,
        _llmConfigPool = llmConfigPool,
        _perceptionSwitch = perceptionSwitch,
@@ -176,16 +217,39 @@ class KernelService {
        _openToolDirectory = openToolDirectory,
        _logger = logger,
        _driftMemory = driftMemory,
+       _preferenceVectorStore = preferenceVectorStore,
        _memorySummarizerStarted = memorySummarizerStarted,
        _jobSnapshotDispatcher =
            jobSnapshotDispatcher ?? _JobSnapshotDispatcher(),
-       _runtimeConfig = runtimeConfig;
+       _runtimeConfig = runtimeConfig,
+       _opentoolDaemonHost =
+           opentoolDaemonHost ?? runtimeConfig.opentoolDaemonHost,
+       _opentoolDaemonPort =
+           opentoolDaemonPort ?? runtimeConfig.opentoolDaemonPort,
+       _embeddingsBaseUrl = embeddingsBaseUrl;
 
   String get defaultUserId => _defaultUserId;
 
   String getCurrentUserId() => _defaultUserId;
 
-  static Future<KernelService> create(KernelServiceConfig config) async {
+  static Future<KernelService> create({
+    KernelRuntimeConfig runtime = const KernelRuntimeConfig(),
+  }) {
+    return _createFromConfig(
+      KernelServiceConfig(
+        liteAgentSdk: LiteAgentSDK(baseUrl: 'http://127.0.0.1:65535'),
+        embeddings: const EmbeddingsConfig(
+          baseUrl: 'http://127.0.0.1:65534',
+          docsName: 'bootstrap',
+        ),
+        runtime: runtime,
+      ),
+    );
+  }
+
+  static Future<KernelService> _createFromConfig(
+    KernelServiceConfig config,
+  ) async {
     final supervision = AdaptiveSupervision(
       ttftThreshold: config.runtime.ttftThreshold,
       tpsThreshold: config.runtime.tpsThreshold,
@@ -342,57 +406,24 @@ class KernelService {
     final learningSwitch = SwitchableLearning(ThrowingLearning());
     final planningSwitch = SwitchablePlanning(ThrowingPlanning());
     if (llmConfig != null && llmConfigResolver != null) {
-      perceptionDelegateSwitch.delegate = LiteAgentPerception(
+      final llmDelegates = _buildLlmServiceDelegates(
         llmQueue: llmQueue,
         client: liteAgentClient,
         llmConfig: llmConfig,
         llmConfigResolver: llmConfigResolver,
-        systemPrompt:
-            'You are an intent extractor. Use emit_intent or reject_intent.',
-        actionHints: const [
-          'count',
-          'create',
-          'read',
-          'list',
-          'sequentiallyRead',
-          'update',
-          'delete',
-          'run',
-        ],
-        fallback: RuleBasedPerception(),
-      );
-      planningSwitch.delegate = LiteAgentPlanning(
-        llmQueue: llmQueue,
-        client: liteAgentClient,
-        llmConfig: llmConfig,
-        llmConfigResolver: llmConfigResolver,
-        systemPrompt:
-            'You plan the next action. Call exactly one planning tool.',
-        openToolDirectory: openToolDirectory,
-      );
-      final liteAgentLearning = LiteAgentLearning(
-        llmQueue: llmQueue,
-        client: liteAgentClient,
         preference: preference,
-        llmConfig: llmConfig,
-        llmConfigResolver: llmConfigResolver,
-        systemPrompt:
-            'You extract user preference signals. Use emit_preference or reject_preference.',
-      );
-      learningSwitch.delegate = DeferredLearning(
-        delegate: liteAgentLearning,
-        llmQueue: llmQueue,
+        openToolDirectory: openToolDirectory,
         logger: logger,
-        enabled: config.runtime.learningDeferredEnabled,
-        interval: config.runtime.learningInterval,
-        maxPerRun: config.runtime.learningMaxPerRun,
-        queueLimit: config.runtime.learningQueueLimit,
+        runtimeConfig: config.runtime,
       );
+      perceptionDelegateSwitch.delegate = llmDelegates.perception;
+      planningSwitch.delegate = llmDelegates.planning;
+      learningSwitch.delegate = llmDelegates.learning;
     }
-    final kernel = Kernel(
+    final kernel = _buildKernel(
       perception: perception,
       planning: planningSwitch,
-      execution: OpenToolExecution(openToolDirectory: openToolDirectory),
+      openToolDirectory: openToolDirectory,
       supervision: supervision,
       memory: longTermMemory,
       preference: preference,
@@ -432,9 +463,13 @@ class KernelService {
       openToolDirectory: openToolDirectory,
       logger: logger,
       driftMemory: longTermMemory,
+      preferenceVectorStore: vectorStore,
       memorySummarizerStarted: memorySummarizerStarted,
       jobSnapshotDispatcher: jobSnapshotDispatcher,
       runtimeConfig: config.runtime,
+      opentoolDaemonHost: config.runtime.opentoolDaemonHost,
+      opentoolDaemonPort: config.runtime.opentoolDaemonPort,
+      embeddingsBaseUrl: config.embeddings.baseUrl,
     );
   }
 
@@ -509,7 +544,38 @@ class KernelService {
     await liteAgentClient.setPresetOpenSpecList(presetOpenSpecList);
   }
 
-  void updateLlmModels(List<KernelLlmModel> models) {
+  Future<void> updateLiteAgentSdk(
+    LiteAgentSDK sdk, {
+    List<PresetOpenSpec>? presetOpenSpecList,
+  }) async {
+    final liteAgentClient = _liteAgentClient;
+    if (liteAgentClient == null) {
+      throw StateError('LiteAgent client is not managed by KernelService.');
+    }
+    liteAgentClient.sdk = sdk;
+    if (presetOpenSpecList != null) {
+      await liteAgentClient.setPresetOpenSpecList(presetOpenSpecList);
+    }
+    _restartExternalServiceMonitoring();
+  }
+
+  void updateOpenToolDaemon({required String host, required int port}) {
+    final normalizedHost = host.trim();
+    if (normalizedHost.isEmpty) {
+      throw ArgumentError('host is required.');
+    }
+    if (port <= 0) {
+      throw ArgumentError('port must be positive.');
+    }
+    _opentoolDaemonHost = normalizedHost;
+    _opentoolDaemonPort = port;
+    _restartExternalServiceMonitoring();
+  }
+
+  void updateLlmModels(
+    List<KernelLlmModel> models, {
+    bool refreshServices = false,
+  }) {
     if (models.isEmpty) {
       throw ArgumentError('models is required.');
     }
@@ -535,7 +601,12 @@ class KernelService {
       supervision.updateModelCatalog(models);
       supervision.startLlmHealthMonitoring(models);
     }
+    if (refreshServices) {
+      updateLlmServices();
+    }
+  }
 
+  void updateLlmServices() {
     final perceptionSwitch = _perceptionSwitch;
     final planningSwitch = _planningSwitch;
     final learningSwitch = _learningSwitch;
@@ -550,56 +621,28 @@ class KernelService {
         openToolDirectory == null) {
       throw StateError('LLM config is not managed by KernelService.');
     }
+    final pool = _llmConfigPool;
+    if (pool == null || pool.configs.isEmpty) {
+      throw StateError('LLM config is not managed by KernelService.');
+    }
     final llmConfig = pool.pick();
-    final llmConfigResolver = () => pool!.pick(
+    final llmConfigResolver = () => pool.pick(
       isAvailable: (candidate) =>
           _isModelAvailable(_kernel.supervision, candidate),
     );
-    perceptionSwitch.delegate = LiteAgentPerception(
+    final llmDelegates = _buildLlmServiceDelegates(
       llmQueue: llmQueue,
       client: liteAgentClient,
       llmConfig: llmConfig,
       llmConfigResolver: llmConfigResolver,
-      systemPrompt:
-          'You are an intent extractor. Use emit_intent or reject_intent.',
-      actionHints: const [
-        'count',
-        'create',
-        'read',
-        'list',
-        'sequentiallyRead',
-        'update',
-        'delete',
-        'run',
-      ],
-      fallback: RuleBasedPerception(),
-    );
-    planningSwitch.delegate = LiteAgentPlanning(
-      llmQueue: llmQueue,
-      client: liteAgentClient,
-      llmConfig: llmConfig,
-      llmConfigResolver: llmConfigResolver,
-      systemPrompt: 'You plan the next action. Call exactly one planning tool.',
-      openToolDirectory: openToolDirectory,
-    );
-    final liteAgentLearning = LiteAgentLearning(
-      llmQueue: llmQueue,
-      client: liteAgentClient,
       preference: _kernel.preference,
-      llmConfig: llmConfig,
-      llmConfigResolver: llmConfigResolver,
-      systemPrompt:
-          'You extract user preference signals. Use emit_preference or reject_preference.',
-    );
-    learningSwitch.delegate = DeferredLearning(
-      delegate: liteAgentLearning,
-      llmQueue: llmQueue,
+      openToolDirectory: openToolDirectory,
       logger: _logger,
-      enabled: _runtimeConfig.learningDeferredEnabled,
-      interval: _runtimeConfig.learningInterval,
-      maxPerRun: _runtimeConfig.learningMaxPerRun,
-      queueLimit: _runtimeConfig.learningQueueLimit,
+      runtimeConfig: _runtimeConfig,
     );
+    perceptionSwitch.delegate = llmDelegates.perception;
+    planningSwitch.delegate = llmDelegates.planning;
+    learningSwitch.delegate = llmDelegates.learning;
     if (_runtimeConfig.memorySummaryEnabled &&
         !_memorySummarizerStarted &&
         _driftMemory != null) {
@@ -619,6 +662,89 @@ class KernelService {
       );
       _memorySummarizerStarted = true;
     }
+  }
+
+  Future<bool> updateEmbeddingsConfig(EmbeddingsConfig config) async {
+    final vectorStore = _preferenceVectorStore;
+    if (vectorStore == null) {
+      throw StateError('Embeddings config is not managed by KernelService.');
+    }
+
+    final pool = _llmConfigPool;
+    if (pool == null || pool.configs.isEmpty) {
+      vectorStore.delegate = ThrowingTextQueryVectorStore();
+      return false;
+    }
+
+    final candidate = _resolveEmbeddingsLlmConfig(config, pool);
+    if (candidate == null) {
+      vectorStore.delegate = ThrowingTextQueryVectorStore();
+      return false;
+    }
+
+    final embeddingsClient = embeddings.LiteEmbeddingsClient(
+      baseUrl: config.baseUrl,
+      bearerToken: config.apiKey,
+    );
+    final embeddingsLlmConfig = embeddings.LLMConfig(
+      baseUrl: candidate.baseUrl,
+      apiKey: candidate.apiKey,
+      model: _resolveEmbeddingsModel(config.model, candidate.model),
+    );
+
+    try {
+      final docsId = await _ensureDocsId(
+        embeddingsClient,
+        config.docsName,
+        embeddingsLlmConfig,
+      );
+      vectorStore.delegate = LiteEmbeddingsVectorStore(
+        client: embeddingsClient,
+        docsId: docsId,
+        llmConfig: embeddingsLlmConfig,
+      );
+      _restartEmbeddingsHealthMonitoring(config.baseUrl);
+      return true;
+    } catch (_) {
+      vectorStore.delegate = ThrowingTextQueryVectorStore();
+      return false;
+    }
+  }
+
+  LLMConfig? _resolveEmbeddingsLlmConfig(
+    EmbeddingsConfig config,
+    LlmConfigPool pool,
+  ) {
+    final preferred = config.llmModel?.trim();
+    if (preferred != null && preferred.isNotEmpty) {
+      for (final candidate in pool.configs) {
+        if (candidate.model == preferred) {
+          return candidate;
+        }
+      }
+      return null;
+    }
+    final available = getAvailableLlmConfig();
+    return available ?? pool.pick();
+  }
+
+  void _restartEmbeddingsHealthMonitoring(String baseUrl) {
+    _embeddingsBaseUrl = baseUrl;
+    _restartExternalServiceMonitoring();
+  }
+
+  void _restartExternalServiceMonitoring() {
+    final supervision = _kernel.supervision;
+    final liteAgentClient = _liteAgentClient;
+    if (supervision is! AdaptiveSupervision || liteAgentClient == null) {
+      return;
+    }
+    supervision.startExternalServiceMonitoring(
+      liteAgentSdk: liteAgentClient.sdk,
+      opentoolHost: _opentoolDaemonHost,
+      opentoolPort: _opentoolDaemonPort,
+      embeddingsBaseUrl: _embeddingsBaseUrl,
+    );
   }
 
   Map<String, ModelHealthSnapshot> getModelHealth() {
@@ -673,6 +799,71 @@ class KernelService {
     return const ExternalServiceHealthSnapshot(items: {});
   }
 
+  KernelReadiness getReadiness({
+    bool requireLlm = true,
+    bool requireLiteAgent = true,
+    bool requireOpenToolDaemon = false,
+    bool requireEmbeddings = false,
+  }) {
+    final reasons = <String>[];
+    final llmConfigured = _llmConfigPool?.configs.isNotEmpty ?? false;
+    final llmServicesReady = _areLlmServicesReady();
+    final health = getExternalServiceHealth();
+    final liteAgentReady = _hasHealthyExternalService(
+      health,
+      ExternalServiceType.liteagent,
+    );
+    final openToolDaemonReady = _hasHealthyExternalService(
+      health,
+      ExternalServiceType.opentoolDaemon,
+    );
+    final embeddingsReady = _hasHealthyExternalService(
+      health,
+      ExternalServiceType.embeddings,
+    );
+
+    if (requireLlm && !llmConfigured) {
+      reasons.add('LLM models are not configured.');
+    }
+    if (requireLlm && !llmServicesReady) {
+      reasons.add('LLM services are not activated. Call updateLlmServices().');
+    }
+    if (requireLiteAgent && !liteAgentReady) {
+      reasons.add('LiteAgent service is not healthy yet.');
+    }
+    if (requireOpenToolDaemon && !openToolDaemonReady) {
+      reasons.add('OpenTool daemon is not healthy yet.');
+    }
+    if (requireEmbeddings && !embeddingsReady) {
+      reasons.add('Embeddings service is not healthy yet.');
+    }
+
+    return KernelReadiness(
+      ready: reasons.isEmpty,
+      llmConfigured: llmConfigured,
+      llmServicesReady: llmServicesReady,
+      liteAgentReady: liteAgentReady,
+      openToolDaemonReady: openToolDaemonReady,
+      embeddingsReady: embeddingsReady,
+      reasons: reasons,
+    );
+  }
+
+  bool isReady({
+    bool requireLlm = true,
+    bool requireLiteAgent = true,
+    bool requireOpenToolDaemon = false,
+    bool requireEmbeddings = false,
+  }) {
+    final readiness = getReadiness(
+      requireLlm: requireLlm,
+      requireLiteAgent: requireLiteAgent,
+      requireOpenToolDaemon: requireOpenToolDaemon,
+      requireEmbeddings: requireEmbeddings,
+    );
+    return readiness.ready;
+  }
+
   ExternalServiceHealthSubscription onExternalServiceHealthChange(
     ExternalServiceHealthListener onChange,
   ) {
@@ -681,6 +872,30 @@ class KernelService {
       return supervision.onExternalServiceHealthChange(onChange);
     }
     return ExternalServiceHealthSubscription(() {});
+  }
+
+  bool _areLlmServicesReady() {
+    final perception = _perceptionSwitch;
+    final planning = _planningSwitch;
+    final learning = _learningSwitch;
+    if (perception == null || planning == null || learning == null) {
+      return false;
+    }
+    return perception.delegate is! ThrowingPerception &&
+        planning.delegate is! ThrowingPlanning &&
+        learning.delegate is! ThrowingLearning;
+  }
+
+  bool _hasHealthyExternalService(
+    ExternalServiceHealthSnapshot snapshot,
+    ExternalServiceType type,
+  ) {
+    for (final item in snapshot.items.values) {
+      if (item.type == type && item.available) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Get memory snapshot for a scope.
@@ -854,6 +1069,22 @@ class KernelService {
     return directory.registerRemote(spec, serverUrl: serverUrl, apiKey: apiKey);
   }
 
+  bool updateRemoteOpenToolEndpoint(
+    String toolId, {
+    String? serverUrl,
+    String? apiKey,
+  }) {
+    if ((serverUrl == null || serverUrl.trim().isEmpty) && apiKey == null) {
+      throw ArgumentError('Either serverUrl or apiKey is required.');
+    }
+    final directory = _resolveOpenToolDirectory();
+    return directory.updateRemoteEndpoint(
+      toolId,
+      serverUrl: serverUrl,
+      apiKey: apiKey,
+    );
+  }
+
   void updateAppInfoList(List<AppInfo> apps) {
     final tool = _ensureAppCalledTool();
     tool.updateApps(apps);
@@ -871,6 +1102,92 @@ class KernelService {
   }
 
   // Debug/admin accessors live in KernelAdminService.
+
+  static Kernel _buildKernel({
+    required Perception perception,
+    required Planning planning,
+    required OpenToolDirectory openToolDirectory,
+    required Supervision supervision,
+    required DriftMemory memory,
+    required Preference preference,
+    required Learning learning,
+    required JobManager jobManager,
+    required KernelLogger logger,
+  }) {
+    return Kernel(
+      perception: perception,
+      planning: planning,
+      execution: OpenToolExecution(openToolDirectory: openToolDirectory),
+      supervision: supervision,
+      memory: memory,
+      preference: preference,
+      learning: learning,
+      jobManager: jobManager,
+      logger: logger,
+    );
+  }
+
+  static _LlmServiceDelegates _buildLlmServiceDelegates({
+    required LlmQueue llmQueue,
+    required LiteAgentClient client,
+    required LLMConfig llmConfig,
+    required LlmConfigResolver llmConfigResolver,
+    required Preference preference,
+    required OpenToolDirectory openToolDirectory,
+    required KernelLogger? logger,
+    required KernelRuntimeConfig runtimeConfig,
+  }) {
+    final perception = LiteAgentPerception(
+      llmQueue: llmQueue,
+      client: client,
+      llmConfig: llmConfig,
+      llmConfigResolver: llmConfigResolver,
+      systemPrompt:
+          'You are an intent extractor. Use emit_intent or reject_intent.',
+      actionHints: const [
+        'count',
+        'create',
+        'read',
+        'list',
+        'sequentiallyRead',
+        'update',
+        'delete',
+        'run',
+      ],
+      fallback: RuleBasedPerception(),
+    );
+    final planning = LiteAgentPlanning(
+      llmQueue: llmQueue,
+      client: client,
+      llmConfig: llmConfig,
+      llmConfigResolver: llmConfigResolver,
+      systemPrompt: 'You plan the next action. Call exactly one planning tool.',
+      openToolDirectory: openToolDirectory,
+    );
+    final liteAgentLearning = LiteAgentLearning(
+      llmQueue: llmQueue,
+      client: client,
+      preference: preference,
+      llmConfig: llmConfig,
+      llmConfigResolver: llmConfigResolver,
+      systemPrompt:
+          'You extract user preference signals. Use emit_preference or reject_preference.',
+    );
+    final learning = DeferredLearning(
+      delegate: liteAgentLearning,
+      llmQueue: llmQueue,
+      logger: logger,
+      enabled: runtimeConfig.learningDeferredEnabled,
+      interval: runtimeConfig.learningInterval,
+      maxPerRun: runtimeConfig.learningMaxPerRun,
+      queueLimit: runtimeConfig.learningQueueLimit,
+    );
+    return _LlmServiceDelegates(
+      perception: perception,
+      planning: planning,
+      learning: learning,
+    );
+  }
 
   Map<String, dynamic>? _mergeContent(
     Map<String, dynamic>? data,
