@@ -1,3 +1,7 @@
+enum LlmModelSource { local, remote, custom }
+
+enum KernelMode { economy, balanced, performance }
+
 class LlmRequestMeta {
   final String id;
   final String purpose;
@@ -99,6 +103,7 @@ class KernelLlmModel {
   final String quantization;
   final num sizeGB;
   final int? contextWindowSize;
+  final LlmModelSource source;
 
   const KernelLlmModel({
     required this.baseUrl,
@@ -110,6 +115,7 @@ class KernelLlmModel {
     required this.quantization,
     required this.sizeGB,
     this.contextWindowSize,
+    this.source = LlmModelSource.local,
   });
 
   String modelKey({String? apiKeyOverride}) {

@@ -59,6 +59,8 @@ dart run example/service_example.dart
   - 替换 LLM 模型列表（若之前未配置 LLM，将启用 LLM 组件）。
 - `setPresetOpenSpecList(List<PresetOpenSpec>)`
   - 更新 LiteAgent 的预置 OpenSpec 列表（初始化后由外部显式调用）。
+- `setMode(KernelMode mode)` / `getMode()` → `KernelMode`
+  - 运行时切换路由模式：`economy`（省电）、`balanced`（均衡，默认）、`performance`（性能）。
 
 只读信息：
 - `getModelHealth()` → `Map<String, ModelHealthSnapshot>`
@@ -80,13 +82,41 @@ dart run example/service_example.dart
 
 ## LLM 路由
 
-`KernelServiceConfig` 支持一个模型列表（也可传 `null` 来禁用 LLM）。
-运行时会选择第一个“可用”的模型（基于 supervision 健康状态），
-如果首选模型不可用则自动降级到下一个模型。
-如果外部需要查询“此刻可接单”的模型，可使用 `getAvailableLlmConfig()`
-（健康状态 + 实时并发能力综合判断）。
-如果未提供 LLM 模型，依赖 LLM 的逻辑会抛出 `StateError`，
-直到调用 `updateLlmModels` 为止。
+### 模型来源
+
+每个 `KernelLlmModel` 通过 `source` 字段声明其运行位置：
+
+| 来源 | 说明 | 费用 |
+|------|------|------|
+| `LlmModelSource.local` | 本地模型（如 llama.cpp、Ollama） | 免费 |
+| `LlmModelSource.remote` | 平台提供的云端模型，按 token 计费 | 付费 |
+| `LlmModelSource.custom` | 用户自定义端点（baseUrl/apiKey/model） | 不确定 |
+
+### 内核模式
+
+用户选择一种模式（类似电脑的电源计划）来控制模型路由：
+
+| 模式 | 优先级 | 行为 |
+|------|--------|------|
+| `KernelMode.economy` | local → custom → remote | 除规划外尽量避免使用远端模型（节省 token） |
+| `KernelMode.balanced` | local → custom → remote | 默认；规划阶段跳过小于 14B 的本地模型 |
+| `KernelMode.performance` | remote → custom → local | 优先使用最强模型 |
+
+通过 `KernelRuntimeConfig(mode: KernelMode.economy)` 在初始化时设定，
+或通过 `service.setMode(KernelMode.performance)` 在运行时切换。
+
+### 模型画像
+
+内核会自动记录每次 LLM 调用的性能画像（TTFT、TPS、各用途的成功率）。
+当某模型在某用途上的调用次数 ≥ 10 次且成功率低于 `profileSuccessRateThreshold`
+（默认 0.4）时，在 balanced/performance 模式下该模型会被自动跳过。
+画像数据通过 Hive 持久化，重启后仍然生效。
+
+### 降级策略
+
+若未配置任何 LLM 模型，依赖 LLM 的逻辑会抛出 `StateError`，直到调用 `updateLlmModels`。
+在每种模式下，resolver 按来源优先级依次尝试；
+如果所有模型都被过滤，则兜底返回列表中的第一个模型。
 
 ## 外部服务健康
 
@@ -134,60 +164,69 @@ final service = await KernelService.create(
   KernelServiceConfig(
     liteAgent: LiteAgentConfig(
       baseUrl: '<LITEAGENT_BASE_URL>',
-      apiKey: '<LITEAGENT_API_KEY>', // optional
-      presetOpenSpecList: const [], // optional
+      apiKey: '<LITEAGENT_API_KEY>', // 可选
+      presetOpenSpecList: const [], // 可选
     ),
     llm: LlmConfigGroup(
       models: const [
+        // 本地模型（免费）
         KernelLlmModel(
-          baseUrl: '<LLM_BASE_URL>',
-          apiKey: '<LLM_API_KEY>',
-          model: '<LLM_MODEL>',
-          description: '<LLM_DESCRIPTION>',
-          parameters: '<LLM_PARAMETERS>',
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          model: 'qwen2.5:32b',
+          description: 'Qwen 2.5 32B 本地',
+          parameters: '32B',
           paramsB: 32,
-          quantization: '<LLM_QUANTIZATION>',
+          quantization: 'Q4_K_M',
           sizeGB: 19.9,
-          contextWindowSize: 32768, // 可选
+          contextWindowSize: 32768,
+          source: LlmModelSource.local,   // 默认值
         ),
+        // 平台云端模型（按 token 计费）
         KernelLlmModel(
-          baseUrl: '<LLM_BASE_URL_2>',
-          apiKey: '<LLM_API_KEY_2>',
-          model: '<LLM_MODEL_2>',
-          description: '<LLM_DESCRIPTION_2>',
-          parameters: '<LLM_PARAMETERS_2>',
+          baseUrl: '<REMOTE_API_URL>',
+          apiKey: '<REMOTE_API_KEY>',
+          model: 'gpt-4o',
+          description: 'GPT-4o 平台云端',
+          parameters: '~200B',
+          paramsB: 200,
+          quantization: 'none',
+          sizeGB: 0,
+          source: LlmModelSource.remote,
+        ),
+        // 用户自定义端点（费用不确定）
+        KernelLlmModel(
+          baseUrl: '<CUSTOM_BASE_URL>',
+          apiKey: '<CUSTOM_API_KEY>',
+          model: '<CUSTOM_MODEL>',
+          description: '用户自定义模型',
+          parameters: 'unknown',
           paramsB: 14,
-          quantization: '<LLM_QUANTIZATION_2>',
-          sizeGB: 8.0,
-          contextWindowSize: 16384, // 可选
+          quantization: 'unknown',
+          sizeGB: 0,
+          source: LlmModelSource.custom,
         ),
       ],
     ),
     embeddings: EmbeddingsConfig(
       baseUrl: '<LITE_EMBEDDINGS_BASE_URL>',
-      apiKey: '<LITE_EMBEDDINGS_API_KEY>', // optional
+      apiKey: '<LITE_EMBEDDINGS_API_KEY>', // 可选
       docsName: '<LITE_EMBEDDINGS_DOCS_NAME>',
-      model: '<EMBEDDINGS_MODEL>', // optional
-      llmModel: '<EMBEDDINGS_LLM_MODEL>', // optional
+      model: '<EMBEDDINGS_MODEL>', // 可选
+      llmModel: '<EMBEDDINGS_LLM_MODEL>', // 可选
     ),
     runtime: KernelRuntimeConfig(
-      memoryDbPath: '.hive/kernel_memory.sqlite', // optional: 修改记忆数据库路径
-      memorySummaryRecentWindow: Duration(hours: 24), // optional
-      memorySummaryMaxRecords: 200, // optional
-      memorySummaryMinRecords: 20, // optional
-      memorySummaryLimit: 5, // optional
-      memorySummaryEnabled: true, // optional: LLM 空闲时自动摘要
-      memorySummaryInterval: Duration(minutes: 5), // optional
-      memorySummaryMaxScopesPerRun: 1, // optional
-      learningDeferredEnabled: true, // optional: LLM 空闲时做偏好学习
-      learningInterval: Duration(minutes: 5), // optional
-      learningMaxPerRun: 1, // optional
-      learningQueueLimit: 500, // optional
-      opentoolDaemonHost: '127.0.0.1', // optional
-      opentoolDaemonPort: 19627, // optional
+      mode: KernelMode.balanced,          // 可选：economy | balanced | performance
+      memoryDbPath: '.hive/kernel_memory.sqlite', // 可选：修改记忆数据库路径
+      memorySummaryEnabled: true,         // 可选：LLM 空闲时自动摘要
+      learningDeferredEnabled: true,      // 可选：LLM 空闲时做偏好学习
+      opentoolDaemonHost: '127.0.0.1',   // 可选
+      opentoolDaemonPort: 19627,         // 可选
     ),
   ),
 );
+
+// 运行时切换模式
+service.setMode(KernelMode.economy);
 ```
 
 无 LLM 启动示例：

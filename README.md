@@ -59,6 +59,8 @@ Model Configuration:
   - Replace the LLM model list (and enable LLM components if they were not configured).
 - `setPresetOpenSpecList(List<PresetOpenSpec>)`
   - Update LiteAgent preset OpenSpec list (called explicitly by external code after init).
+- `setMode(KernelMode mode)` / `getMode()` → `KernelMode`
+  - Switch the active routing mode at runtime: `economy`, `balanced` (default), or `performance`.
 
 Read-only Info:
 - `getModelHealth()` → `Map<String, ModelHealthSnapshot>`
@@ -81,13 +83,42 @@ Read-only Info:
 
 ## LLM routing
 
-`KernelServiceConfig` accepts a list of LLM models (or `null` to disable LLM).
-The runtime resolver picks the first available model (based on supervision health),
-so if the preferred model is unhealthy it falls back to the next model.
-For external callers that need the current runnable model, use
-`getAvailableLlmConfig()` (health + live concurrency check).
+### Model sources
+
+Each `KernelLlmModel` declares a `source` that indicates where it runs:
+
+| Source | Description | Cost |
+|--------|------------|------|
+| `LlmModelSource.local` | On-device model (e.g. llama.cpp, Ollama) | Free |
+| `LlmModelSource.remote` | Platform-provided cloud model, billed per token | Paid |
+| `LlmModelSource.custom` | User-provided endpoint (baseUrl/apiKey/model) | Varies |
+
+### Kernel modes
+
+Users select a mode (like a computer power plan) to control model routing:
+
+| Mode | Priority | Behaviour |
+|------|----------|-----------|
+| `KernelMode.economy` | local → custom → remote | Avoids remote models except for planning (saves tokens) |
+| `KernelMode.balanced` | local → custom → remote | Default; skips local models < 14B for planning |
+| `KernelMode.performance` | remote → custom → local | Prefers the most capable model first |
+
+Set the mode at init via `KernelRuntimeConfig(mode: KernelMode.economy)` or
+switch at runtime with `service.setMode(KernelMode.performance)`.
+
+### Model profiler
+
+The kernel automatically profiles every LLM call (TTFT, TPS, success rate per purpose).
+After 10 calls to a model for a given purpose, models with a success rate below
+`profileSuccessRateThreshold` (default 0.4) are skipped in balanced/performance modes.
+Profile data is persisted via Hive so it survives restarts.
+
+### Fallback
+
 If no LLM models are provided, LLM-dependent operations throw `StateError`
 until `updateLlmModels` is called.
+Within each mode the resolver falls back through the source priority list.
+If all models are filtered out, the pool returns the first model as a last resort.
 
 ## External service health
 
@@ -140,27 +171,41 @@ final service = await KernelService.create(
     ),
     llm: LlmConfigGroup(
       models: const [
+        // On-device model (free)
         KernelLlmModel(
-          baseUrl: '<LLM_BASE_URL>',
-          apiKey: '<LLM_API_KEY>',
-          model: '<LLM_MODEL>',
-          description: '<LLM_DESCRIPTION>',
-          parameters: '<LLM_PARAMETERS>',
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          model: 'qwen2.5:32b',
+          description: 'Qwen 2.5 32B local',
+          parameters: '32B',
           paramsB: 32,
-          quantization: '<LLM_QUANTIZATION>',
+          quantization: 'Q4_K_M',
           sizeGB: 19.9,
-          contextWindowSize: 32768, // optional
+          contextWindowSize: 32768,
+          source: LlmModelSource.local,   // default
         ),
+        // Platform cloud model (paid per token)
         KernelLlmModel(
-          baseUrl: '<LLM_BASE_URL_2>',
-          apiKey: '<LLM_API_KEY_2>',
-          model: '<LLM_MODEL_2>',
-          description: '<LLM_DESCRIPTION_2>',
-          parameters: '<LLM_PARAMETERS_2>',
+          baseUrl: '<REMOTE_API_URL>',
+          apiKey: '<REMOTE_API_KEY>',
+          model: 'gpt-4o',
+          description: 'GPT-4o via platform',
+          parameters: '~200B',
+          paramsB: 200,
+          quantization: 'none',
+          sizeGB: 0,
+          source: LlmModelSource.remote,
+        ),
+        // User-provided endpoint (cost varies)
+        KernelLlmModel(
+          baseUrl: '<CUSTOM_BASE_URL>',
+          apiKey: '<CUSTOM_API_KEY>',
+          model: '<CUSTOM_MODEL>',
+          description: 'User custom model',
+          parameters: 'unknown',
           paramsB: 14,
-          quantization: '<LLM_QUANTIZATION_2>',
-          sizeGB: 8.0,
-          contextWindowSize: 16384, // optional
+          quantization: 'unknown',
+          sizeGB: 0,
+          source: LlmModelSource.custom,
         ),
       ],
     ),
@@ -172,23 +217,18 @@ final service = await KernelService.create(
       llmModel: '<EMBEDDINGS_LLM_MODEL>', // optional
     ),
     runtime: KernelRuntimeConfig(
+      mode: KernelMode.balanced,          // optional: economy | balanced | performance
       memoryDbPath: '.hive/kernel_memory.sqlite', // optional: override memory DB path
-      memorySummaryRecentWindow: Duration(hours: 24), // optional
-      memorySummaryMaxRecords: 200, // optional
-      memorySummaryMinRecords: 20, // optional
-      memorySummaryLimit: 5, // optional
-      memorySummaryEnabled: true, // optional: auto summarize when LLM is idle
-      memorySummaryInterval: Duration(minutes: 5), // optional
-      memorySummaryMaxScopesPerRun: 1, // optional
-      learningDeferredEnabled: true, // optional: run preference learning when idle
-      learningInterval: Duration(minutes: 5), // optional
-      learningMaxPerRun: 1, // optional
-      learningQueueLimit: 500, // optional
-      opentoolDaemonHost: '127.0.0.1', // optional
-      opentoolDaemonPort: 19627, // optional
+      memorySummaryEnabled: true,         // optional: auto summarize when LLM is idle
+      learningDeferredEnabled: true,      // optional: run preference learning when idle
+      opentoolDaemonHost: '127.0.0.1',   // optional
+      opentoolDaemonPort: 19627,         // optional
     ),
   ),
 );
+
+// Switch mode at runtime
+service.setMode(KernelMode.economy);
 ```
 
 To start without LLM:

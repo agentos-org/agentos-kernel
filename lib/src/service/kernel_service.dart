@@ -40,6 +40,7 @@ import '../kernel/preference/preference.dart';
 import '../kernel/preference/lite_embeddings_vector_store.dart';
 import '../kernel/preference/vector_store.dart';
 import '../kernel/supervision/model.dart';
+import '../kernel/supervision/model_profiler.dart';
 import '../kernel/supervision/supervision.dart';
 import 'dto.dart';
 
@@ -89,6 +90,9 @@ class KernelRuntimeConfig {
   final int learningQueueLimit;
   final String opentoolDaemonHost;
   final int opentoolDaemonPort;
+  final KernelMode mode;
+  final String modelProfileBoxName;
+  final double profileSuccessRateThreshold;
 
   const KernelRuntimeConfig({
     this.hivePath = '.hive',
@@ -114,6 +118,9 @@ class KernelRuntimeConfig {
     this.learningQueueLimit = 500,
     this.opentoolDaemonHost = '127.0.0.1',
     this.opentoolDaemonPort = DAEMON_DEFAULT_PORT,
+    this.mode = KernelMode.balanced,
+    this.modelProfileBoxName = 'kernel_model_profiles',
+    this.profileSuccessRateThreshold = 0.4,
   });
 }
 
@@ -186,6 +193,8 @@ class KernelService {
   String _opentoolDaemonHost;
   int _opentoolDaemonPort;
   String _embeddingsBaseUrl;
+  final _ModeRef _modeRef;
+  final ModelProfiler? _modelProfiler;
 
   /// Wraps the kernel with a simplified API for external callers.
   KernelService(
@@ -207,6 +216,8 @@ class KernelService {
     String? opentoolDaemonHost,
     int? opentoolDaemonPort,
     String embeddingsBaseUrl = '',
+    _ModeRef? modeRef,
+    ModelProfiler? modelProfiler,
   }) : _perceptionRunner = perceptionRunner,
        _llmConfigPool = llmConfigPool,
        _perceptionSwitch = perceptionSwitch,
@@ -226,11 +237,19 @@ class KernelService {
            opentoolDaemonHost ?? runtimeConfig.opentoolDaemonHost,
        _opentoolDaemonPort =
            opentoolDaemonPort ?? runtimeConfig.opentoolDaemonPort,
-       _embeddingsBaseUrl = embeddingsBaseUrl;
+       _embeddingsBaseUrl = embeddingsBaseUrl,
+       _modeRef = modeRef ?? _ModeRef(runtimeConfig.mode),
+       _modelProfiler = modelProfiler;
 
   String get defaultUserId => _defaultUserId;
 
   String getCurrentUserId() => _defaultUserId;
+
+  KernelMode getMode() => _modeRef.value;
+
+  void setMode(KernelMode mode) {
+    _modeRef.value = mode;
+  }
 
   static Future<KernelService> create({
     KernelRuntimeConfig runtime = const KernelRuntimeConfig(),
@@ -272,26 +291,13 @@ class KernelService {
     );
 
     LlmConfigPool? llmConfigPool;
-    LlmConfigResolver? llmConfigResolver;
     LLMConfig? llmConfig;
     final llmModels = config.llm?.models ?? const <KernelLlmModel>[];
+    final modeRef = _ModeRef(config.runtime.mode);
     if (llmModels.isNotEmpty) {
-      final llmConfigs = llmModels
-          .map(
-            (model) => LLMConfig(
-              baseUrl: model.baseUrl,
-              apiKey: model.apiKey ?? '',
-              model: model.model,
-              contextWindowSize: model.contextWindowSize,
-            ),
-          )
-          .toList();
-      llmConfigPool = LlmConfigPool(llmConfigs);
+      llmConfigPool = LlmConfigPool.fromModels(llmModels);
       supervision.updateModelCatalog(llmModels);
       llmConfig = llmConfigPool.pick();
-      llmConfigResolver = () => llmConfigPool!.pick(
-        isAvailable: (candidate) => _isModelAvailable(supervision, candidate),
-      );
       supervision.startLlmHealthMonitoring(llmModels);
     }
 
@@ -341,6 +347,11 @@ class KernelService {
     final preferenceBox = await Hive.openBox<Map>(
       config.runtime.preferenceBoxName,
     );
+    final modelProfileBox = await Hive.openBox<Map>(
+      config.runtime.modelProfileBoxName,
+    );
+    final modelProfiler = ModelProfiler(box: modelProfileBox);
+    supervision.setModelProfiler(modelProfiler);
 
     final openToolDirectory = OpenToolDirectory();
 
@@ -405,12 +416,15 @@ class KernelService {
     );
     final learningSwitch = SwitchableLearning(ThrowingLearning());
     final planningSwitch = SwitchablePlanning(ThrowingPlanning());
-    if (llmConfig != null && llmConfigResolver != null) {
+    if (llmConfig != null && llmConfigPool != null) {
       final llmDelegates = _buildLlmServiceDelegates(
         llmQueue: llmQueue,
         client: liteAgentClient,
         llmConfig: llmConfig,
-        llmConfigResolver: llmConfigResolver,
+        pool: llmConfigPool,
+        modeRef: modeRef,
+        modelProfiler: modelProfiler,
+        supervision: supervision,
         preference: preference,
         openToolDirectory: openToolDirectory,
         logger: logger,
@@ -435,13 +449,20 @@ class KernelService {
     var memorySummarizerStarted = false;
     if (config.runtime.memorySummaryEnabled &&
         llmConfig != null &&
-        llmConfigResolver != null) {
+        llmConfigPool != null) {
       MemorySummarizer(
         memory: longTermMemory,
         llmQueue: llmQueue,
         client: liteAgentClient,
         llmConfig: llmConfig,
-        llmConfigResolver: llmConfigResolver,
+        llmConfigResolver: _makeResolver(
+          pool: llmConfigPool,
+          purpose: 'summary',
+          modeRef: modeRef,
+          profiler: modelProfiler,
+          supervision: supervision,
+          runtimeConfig: config.runtime,
+        ),
         logger: logger,
         interval: config.runtime.memorySummaryInterval,
         recentWindow: config.runtime.memorySummaryRecentWindow,
@@ -470,6 +491,8 @@ class KernelService {
       opentoolDaemonHost: config.runtime.opentoolDaemonHost,
       opentoolDaemonPort: config.runtime.opentoolDaemonPort,
       embeddingsBaseUrl: config.embeddings.baseUrl,
+      modeRef: modeRef,
+      modelProfiler: modelProfiler,
     );
   }
 
@@ -579,22 +602,12 @@ class KernelService {
     if (models.isEmpty) {
       throw ArgumentError('models is required.');
     }
-    final configs = models
-        .map(
-          (model) => LLMConfig(
-            baseUrl: model.baseUrl,
-            apiKey: model.apiKey ?? '',
-            model: model.model,
-            contextWindowSize: model.contextWindowSize,
-          ),
-        )
-        .toList();
     var pool = _llmConfigPool;
     if (pool == null) {
-      pool = LlmConfigPool(configs);
+      pool = LlmConfigPool.fromModels(models);
       _llmConfigPool = pool;
     } else {
-      pool.update(configs);
+      pool.updateFromModels(models);
     }
     final supervision = _kernel.supervision;
     if (supervision is AdaptiveSupervision) {
@@ -626,15 +639,16 @@ class KernelService {
       throw StateError('LLM config is not managed by KernelService.');
     }
     final llmConfig = pool.pick();
-    final llmConfigResolver = () => pool.pick(
-      isAvailable: (candidate) =>
-          _isModelAvailable(_kernel.supervision, candidate),
-    );
+    final supervision = _kernel.supervision;
+    final profiler = _modelProfiler;
     final llmDelegates = _buildLlmServiceDelegates(
       llmQueue: llmQueue,
       client: liteAgentClient,
       llmConfig: llmConfig,
-      llmConfigResolver: llmConfigResolver,
+      pool: pool,
+      modeRef: _modeRef,
+      modelProfiler: profiler,
+      supervision: supervision,
       preference: _kernel.preference,
       openToolDirectory: openToolDirectory,
       logger: _logger,
@@ -651,7 +665,14 @@ class KernelService {
         llmQueue: llmQueue,
         client: liteAgentClient,
         llmConfig: llmConfig,
-        llmConfigResolver: llmConfigResolver,
+        llmConfigResolver: _makeResolver(
+          pool: pool,
+          purpose: 'summary',
+          modeRef: _modeRef,
+          profiler: profiler,
+          supervision: supervision,
+          runtimeConfig: _runtimeConfig,
+        ),
         logger: _logger,
         interval: _runtimeConfig.memorySummaryInterval,
         recentWindow: _runtimeConfig.memorySummaryRecentWindow,
@@ -757,38 +778,43 @@ class KernelService {
 
   /// Pick the currently available LLM config for external callers.
   ///
-  /// Availability is decided by supervision model health and current
-  /// per-model concurrency/load. Returns null when no model can take
-  /// new requests at the moment.
-  LLMConfig? getAvailableLlmConfig() {
+  /// Availability is decided by supervision model health, current
+  /// per-model concurrency/load, and the active [KernelMode].
+  /// Returns null when no model can take new requests at the moment.
+  LLMConfig? getAvailableLlmConfig({String purpose = 'external_llm'}) {
     final pool = _llmConfigPool;
     if (pool == null || pool.configs.isEmpty) {
       return null;
     }
-    final queue = _llmQueue;
     final supervision = _kernel.supervision;
-    for (final candidate in pool.configs) {
-      if (!_isModelAvailable(supervision, candidate)) {
-        continue;
-      }
-      if (queue == null) {
-        return candidate;
-      }
-      final modelKey = buildLlmModelKey(
-        baseUrl: candidate.baseUrl,
-        model: candidate.model,
-        apiKey: candidate.apiKey,
-      );
-      final snapshot = queue.snapshotForModel(modelKey);
-      final maxConcurrency = supervision.recommendedLlmConcurrency(
-        snapshot,
-        modelKey,
-      );
-      if (maxConcurrency > 0 && snapshot.inFlight < maxConcurrency) {
-        return candidate;
-      }
-    }
-    return null;
+    final modelCatalog = supervision is AdaptiveSupervision
+        ? supervision.modelCatalog
+        : const <String, KernelLlmModel>{};
+    return pool.pickForPurpose(
+      mode: _modeRef.value,
+      purpose: purpose,
+      isAvailable: (candidate) {
+        if (!_isModelAvailable(supervision, candidate)) {
+          return false;
+        }
+        final queue = _llmQueue;
+        if (queue == null) return true;
+        final key = buildLlmModelKey(
+          baseUrl: candidate.baseUrl,
+          model: candidate.model,
+          apiKey: candidate.apiKey ?? '',
+        );
+        final snapshot = queue.snapshotForModel(key);
+        final maxConcurrency = supervision.recommendedLlmConcurrency(
+          snapshot,
+          key,
+        );
+        return maxConcurrency > 0 && snapshot.inFlight < maxConcurrency;
+      },
+      profiler: _modelProfiler,
+      modelCatalog: modelCatalog,
+      successRateThreshold: _runtimeConfig.profileSuccessRateThreshold,
+    );
   }
 
   ExternalServiceHealthSnapshot getExternalServiceHealth() {
@@ -1131,7 +1157,10 @@ class KernelService {
     required LlmQueue llmQueue,
     required LiteAgentClient client,
     required LLMConfig llmConfig,
-    required LlmConfigResolver llmConfigResolver,
+    required LlmConfigPool pool,
+    required _ModeRef modeRef,
+    required ModelProfiler? modelProfiler,
+    required Supervision supervision,
     required Preference preference,
     required OpenToolDirectory openToolDirectory,
     required KernelLogger? logger,
@@ -1141,7 +1170,14 @@ class KernelService {
       llmQueue: llmQueue,
       client: client,
       llmConfig: llmConfig,
-      llmConfigResolver: llmConfigResolver,
+      llmConfigResolver: _makeResolver(
+        pool: pool,
+        purpose: 'perception',
+        modeRef: modeRef,
+        profiler: modelProfiler,
+        supervision: supervision,
+        runtimeConfig: runtimeConfig,
+      ),
       systemPrompt:
           'You are an intent extractor. Use emit_intent or reject_intent.',
       actionHints: const [
@@ -1160,7 +1196,14 @@ class KernelService {
       llmQueue: llmQueue,
       client: client,
       llmConfig: llmConfig,
-      llmConfigResolver: llmConfigResolver,
+      llmConfigResolver: _makeResolver(
+        pool: pool,
+        purpose: 'planning',
+        modeRef: modeRef,
+        profiler: modelProfiler,
+        supervision: supervision,
+        runtimeConfig: runtimeConfig,
+      ),
       systemPrompt: 'You plan the next action. Call exactly one planning tool.',
       openToolDirectory: openToolDirectory,
     );
@@ -1169,7 +1212,14 @@ class KernelService {
       client: client,
       preference: preference,
       llmConfig: llmConfig,
-      llmConfigResolver: llmConfigResolver,
+      llmConfigResolver: _makeResolver(
+        pool: pool,
+        purpose: 'learning',
+        modeRef: modeRef,
+        profiler: modelProfiler,
+        supervision: supervision,
+        runtimeConfig: runtimeConfig,
+      ),
       systemPrompt:
           'You extract user preference signals. Use emit_preference or reject_preference.',
     );
@@ -1187,6 +1237,30 @@ class KernelService {
       planning: planning,
       learning: learning,
     );
+  }
+
+  static LlmConfigResolver _makeResolver({
+    required LlmConfigPool pool,
+    required String purpose,
+    required _ModeRef modeRef,
+    required ModelProfiler? profiler,
+    required Supervision supervision,
+    required KernelRuntimeConfig runtimeConfig,
+  }) {
+    return () {
+      final modelCatalog = supervision is AdaptiveSupervision
+          ? supervision.modelCatalog
+          : const <String, KernelLlmModel>{};
+      final picked = pool.pickForPurpose(
+        mode: modeRef.value,
+        purpose: purpose,
+        isAvailable: (candidate) => _isModelAvailable(supervision, candidate),
+        profiler: profiler,
+        modelCatalog: modelCatalog,
+        successRateThreshold: runtimeConfig.profileSuccessRateThreshold,
+      );
+      return picked ?? pool.pick();
+    };
   }
 
   Map<String, dynamic>? _mergeContent(
@@ -1440,6 +1514,11 @@ Future<String> _ensureDocsId(
     ),
   );
   return created.docsId;
+}
+
+class _ModeRef {
+  KernelMode value;
+  _ModeRef(this.value);
 }
 
 class _ObservableJobManager implements JobManager {

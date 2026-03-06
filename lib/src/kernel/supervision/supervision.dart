@@ -10,6 +10,7 @@ import 'package:opentool_daemon/opentool_daemon_client.dart';
 import '../events.dart';
 import '../agent/model.dart';
 import 'model.dart';
+import 'model_profiler.dart';
 
 abstract class Supervision {
   SupervisionAdvice? observe(KernelEvent event);
@@ -72,6 +73,7 @@ class AdaptiveSupervision implements Supervision {
   final Map<String, _ToolStats> _toolStats = {};
   final Map<String, _ModelHealth> _modelHealth = {};
   Map<String, KernelLlmModel> _modelCatalog = {};
+  ModelProfiler? _modelProfiler;
   final Map<String, ExternalServiceHealth> _externalHealth = {};
   final List<_ExternalHealthListenerEntry> _externalHealthListeners = [];
 
@@ -148,10 +150,18 @@ class AdaptiveSupervision implements Supervision {
         .add(meta.id);
   }
 
+  void setModelProfiler(ModelProfiler profiler) {
+    _modelProfiler = profiler;
+  }
+
+  Map<String, KernelLlmModel> get modelCatalog =>
+      Map<String, KernelLlmModel>.unmodifiable(_modelCatalog);
+
   @override
   void onLlmCompleted(LlmCallMetrics metrics) {
     final modelKey = metrics.meta.modelKey;
     _updateModelHealth(metrics);
+    _modelProfiler?.record(metrics);
     final recent = _recentByModel.putIfAbsent(
       modelKey,
       () => <LlmCallMetrics>[],
@@ -186,6 +196,10 @@ class AdaptiveSupervision implements Supervision {
   }
 
   void _adjustConcurrency(String modelKey) {
+    final model = _modelCatalog[modelKey];
+    if (model != null && model.source != LlmModelSource.local) {
+      return;
+    }
     final recent = _recentByModel[modelKey];
     if (recent == null || recent.isEmpty) {
       return;
@@ -336,15 +350,22 @@ class AdaptiveSupervision implements Supervision {
     if (model == null) {
       return maxConcurrency;
     }
-    if (model.paramsB >= largeModelParamsBThreshold ||
-        model.sizeGB >= largeModelSizeGbThreshold) {
-      return 1;
+    switch (model.source) {
+      case LlmModelSource.remote:
+        return maxConcurrency;
+      case LlmModelSource.custom:
+        return (maxConcurrency / 2).ceil().clamp(1, maxConcurrency);
+      case LlmModelSource.local:
+        if (model.paramsB >= largeModelParamsBThreshold ||
+            model.sizeGB >= largeModelSizeGbThreshold) {
+          return 1;
+        }
+        if (model.paramsB >= mediumModelParamsBThreshold ||
+            model.sizeGB >= mediumModelSizeGbThreshold) {
+          return (maxConcurrency / 2).ceil().clamp(1, maxConcurrency);
+        }
+        return maxConcurrency;
     }
-    if (model.paramsB >= mediumModelParamsBThreshold ||
-        model.sizeGB >= mediumModelSizeGbThreshold) {
-      return (maxConcurrency / 2).ceil().clamp(1, maxConcurrency);
-    }
-    return maxConcurrency;
   }
 
   int _applyConcurrencyCap(int limit, int cap) {
