@@ -15,6 +15,7 @@ Future<void> main() async {
   final embeddingsModel = '<EMBEDDINGS_MODEL>'; // optional
   final embeddingsLlmModel = '<EMBEDDINGS_LLM_MODEL>'; // optional
   final opentoolDaemonHost = '<OPENTOOL_DAEMON_HOST>';
+  final opentoolDaemonApiKey = '<OPENTOOL_DAEMON_API_KEY>';
   const opentoolDaemonPort = 8080;
 
   final service = await KernelService.create();
@@ -42,6 +43,11 @@ Future<void> main() async {
       host: opentoolDaemonHost,
       port: opentoolDaemonPort,
     );
+    if (_isConfigured(opentoolDaemonApiKey)) {
+      await service.startOpenToolDaemonPresetSync(
+        daemonApiKey: opentoolDaemonApiKey,
+      );
+    }
     print('Phase 1: OpenTool daemon updated.');
     _printReadiness(service, 'after opentool daemon');
   }

@@ -130,8 +130,9 @@ class KernelLlmModel {
 String buildLlmModelKey({
   required String baseUrl,
   required String model,
-  required String apiKey,
+  String? apiKey,
 }) {
-  final apiHash = apiKey.hashCode.toUnsigned(32);
+  final normalizedApiKey = apiKey ?? '';
+  final apiHash = normalizedApiKey.hashCode.toUnsigned(32);
   return '$baseUrl|$model|$apiHash';
 }

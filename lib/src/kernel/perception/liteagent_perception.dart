@@ -37,7 +37,9 @@ class LiteAgentPerception implements Perception {
     try {
       final baseConfig = llmConfigResolver?.call() ?? llmConfig;
       final override = _overrideConfig(input, baseConfig);
-      final effectiveConfig = override ?? baseConfig;
+      final effectiveConfig = normalizeLlmConfigForLiteAgent(
+        override ?? baseConfig,
+      );
       final modelKey = buildLlmModelKey(
         baseUrl: effectiveConfig.baseUrl,
         model: effectiveConfig.model,

@@ -111,7 +111,9 @@ class MemorySummarizer {
       scope: scope,
       userId: userId,
     );
-    final effectiveConfig = llmConfigResolver?.call() ?? llmConfig;
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(
+      llmConfigResolver?.call() ?? llmConfig,
+    );
     final modelKey = buildLlmModelKey(
       baseUrl: effectiveConfig.baseUrl,
       model: effectiveConfig.model,

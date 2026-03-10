@@ -1,7 +1,7 @@
 name: agentos_kernel
 description: Kernel modules for agent orchestration and memory.
 version: 0.1.0
-# repository: https://github.com/my_org/my_repo
+repository: https://github.com/agentos-org/agentos_kernel
 
 environment:
   sdk: ^3.10.3
@@ -15,10 +15,8 @@ dependencies:
   dart_openai_sdk: ^6.0.0
   lite_embeddings_sdk_dart:
     path: ../lite_embeddings_sdk_dart
-  liteagent_sdk_dart:
-    path: ../liteagent_sdk_dart
-  opentool_dart:
-    path: ../opentool-hub/opentool-dart
+  liteagent_sdk_dart: ^0.2.1
+  opentool_dart: ^2.0.0
   opentool_daemon:
     path: ../opentool-hub/opentool-util-daemon
 

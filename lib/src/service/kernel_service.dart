@@ -43,6 +43,7 @@ import '../kernel/supervision/model.dart';
 import '../kernel/supervision/model_profiler.dart';
 import '../kernel/supervision/supervision.dart';
 import 'dto.dart';
+import 'model.dart';
 
 class LlmConfigGroup {
   final List<KernelLlmModel> models;
@@ -160,6 +161,24 @@ class KernelReadiness {
   });
 }
 
+class DaemonPresetToolCandidate {
+  final String toolId;
+  final String alias;
+  final String status;
+  final String serverUrl;
+  final OpenTool spec;
+
+  const DaemonPresetToolCandidate({
+    required this.toolId,
+    required this.alias,
+    required this.status,
+    required this.serverUrl,
+    required this.spec,
+  });
+}
+
+typedef DaemonPresetFilter = bool Function(DaemonPresetToolCandidate candidate);
+
 class _LlmServiceDelegates {
   final Perception perception;
   final Planning planning;
@@ -193,11 +212,57 @@ class KernelService {
   String _opentoolDaemonHost;
   int _opentoolDaemonPort;
   String _embeddingsBaseUrl;
-  final _ModeRef _modeRef;
+  KernelMode _mode;
   final ModelProfiler? _modelProfiler;
+  _OpenToolDaemonPresetSync? _openToolDaemonPresetSync;
+  String? _openToolDaemonSyncApiKey;
+  Duration _openToolDaemonSyncDebounce = const Duration(milliseconds: 200);
+  DaemonPresetFilter? _openToolDaemonPresetFilter;
 
   /// Wraps the kernel with a simplified API for external callers.
-  KernelService(
+  factory KernelService(
+    Kernel kernel, {
+    PerceptionAgentRunner? perceptionRunner,
+    LlmConfigPool? llmConfigPool,
+    SwitchablePerception? perceptionSwitch,
+    SwitchablePlanning? planningSwitch,
+    SwitchableLearning? learningSwitch,
+    LiteAgentClient? liteAgentClient,
+    LlmQueue? llmQueue,
+    OpenToolDirectory? openToolDirectory,
+    KernelLogger? logger,
+    DriftMemory? driftMemory,
+    SwitchableTextQueryVectorStore? preferenceVectorStore,
+    bool memorySummarizerStarted = false,
+    KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
+    String? opentoolDaemonHost,
+    int? opentoolDaemonPort,
+    String embeddingsBaseUrl = '',
+    ModelProfiler? modelProfiler,
+  }) {
+    return KernelService._internal(
+      kernel,
+      perceptionRunner: perceptionRunner,
+      llmConfigPool: llmConfigPool,
+      perceptionSwitch: perceptionSwitch,
+      planningSwitch: planningSwitch,
+      learningSwitch: learningSwitch,
+      liteAgentClient: liteAgentClient,
+      llmQueue: llmQueue,
+      openToolDirectory: openToolDirectory,
+      logger: logger,
+      driftMemory: driftMemory,
+      preferenceVectorStore: preferenceVectorStore,
+      memorySummarizerStarted: memorySummarizerStarted,
+      runtimeConfig: runtimeConfig,
+      opentoolDaemonHost: opentoolDaemonHost,
+      opentoolDaemonPort: opentoolDaemonPort,
+      embeddingsBaseUrl: embeddingsBaseUrl,
+      modelProfiler: modelProfiler,
+    );
+  }
+
+  KernelService._internal(
     this._kernel, {
     PerceptionAgentRunner? perceptionRunner,
     LlmConfigPool? llmConfigPool,
@@ -216,7 +281,6 @@ class KernelService {
     String? opentoolDaemonHost,
     int? opentoolDaemonPort,
     String embeddingsBaseUrl = '',
-    _ModeRef? modeRef,
     ModelProfiler? modelProfiler,
   }) : _perceptionRunner = perceptionRunner,
        _llmConfigPool = llmConfigPool,
@@ -238,17 +302,17 @@ class KernelService {
        _opentoolDaemonPort =
            opentoolDaemonPort ?? runtimeConfig.opentoolDaemonPort,
        _embeddingsBaseUrl = embeddingsBaseUrl,
-       _modeRef = modeRef ?? _ModeRef(runtimeConfig.mode),
+       _mode = runtimeConfig.mode,
        _modelProfiler = modelProfiler;
 
   String get defaultUserId => _defaultUserId;
 
   String getCurrentUserId() => _defaultUserId;
 
-  KernelMode getMode() => _modeRef.value;
+  KernelMode getMode() => _mode;
 
   void setMode(KernelMode mode) {
-    _modeRef.value = mode;
+    _mode = mode;
   }
 
   static Future<KernelService> create({
@@ -293,7 +357,6 @@ class KernelService {
     LlmConfigPool? llmConfigPool;
     LLMConfig? llmConfig;
     final llmModels = config.llm?.models ?? const <KernelLlmModel>[];
-    final modeRef = _ModeRef(config.runtime.mode);
     if (llmModels.isNotEmpty) {
       llmConfigPool = LlmConfigPool.fromModels(llmModels);
       supervision.updateModelCatalog(llmModels);
@@ -422,7 +485,7 @@ class KernelService {
         client: liteAgentClient,
         llmConfig: llmConfig,
         pool: llmConfigPool,
-        modeRef: modeRef,
+        mode: () => config.runtime.mode,
         modelProfiler: modelProfiler,
         supervision: supervision,
         preference: preference,
@@ -457,8 +520,8 @@ class KernelService {
         llmConfig: llmConfig,
         llmConfigResolver: _makeResolver(
           pool: llmConfigPool,
-          purpose: 'summary',
-          modeRef: modeRef,
+          purpose: 'memory_summary',
+          mode: () => config.runtime.mode,
           profiler: modelProfiler,
           supervision: supervision,
           runtimeConfig: config.runtime,
@@ -473,7 +536,7 @@ class KernelService {
       );
       memorySummarizerStarted = true;
     }
-    return KernelService(
+    return KernelService._internal(
       kernel,
       llmConfigPool: llmConfigPool,
       perceptionSwitch: perceptionDelegateSwitch,
@@ -491,7 +554,6 @@ class KernelService {
       opentoolDaemonHost: config.runtime.opentoolDaemonHost,
       opentoolDaemonPort: config.runtime.opentoolDaemonPort,
       embeddingsBaseUrl: config.embeddings.baseUrl,
-      modeRef: modeRef,
       modelProfiler: modelProfiler,
     );
   }
@@ -580,6 +642,7 @@ class KernelService {
       await liteAgentClient.setPresetOpenSpecList(presetOpenSpecList);
     }
     _restartExternalServiceMonitoring();
+    await _openToolDaemonPresetSync?.republish();
   }
 
   void updateOpenToolDaemon({required String host, required int port}) {
@@ -593,6 +656,62 @@ class KernelService {
     _opentoolDaemonHost = normalizedHost;
     _opentoolDaemonPort = port;
     _restartExternalServiceMonitoring();
+    unawaited(_restartOpenToolDaemonPresetSync());
+  }
+
+  Future<void> startOpenToolDaemonPresetSync({
+    required String daemonApiKey,
+    Duration debounce = const Duration(milliseconds: 200),
+    DaemonPresetFilter? presetFilter,
+  }) async {
+    if (daemonApiKey.trim().isEmpty) {
+      throw ArgumentError('daemonApiKey is required.');
+    }
+    final liteAgentClient = _liteAgentClient;
+    if (liteAgentClient == null) {
+      throw StateError('LiteAgent client is not managed by KernelService.');
+    }
+    _openToolDaemonSyncApiKey = daemonApiKey.trim();
+    _openToolDaemonSyncDebounce = debounce;
+    _openToolDaemonPresetFilter = presetFilter;
+    final existing = _openToolDaemonPresetSync;
+    if (existing != null) {
+      await existing.dispose();
+    }
+    final sync = _OpenToolDaemonPresetSync(
+      hostProvider: () => _opentoolDaemonHost,
+      portProvider: () => _opentoolDaemonPort,
+      daemonApiKey: _openToolDaemonSyncApiKey!,
+      debounce: _openToolDaemonSyncDebounce,
+      presetFilter: _openToolDaemonPresetFilter,
+      setPresetOpenSpecList: setPresetOpenSpecList,
+      openToolDirectoryProvider: _resolveOpenToolDirectory,
+      logger: _logger,
+    );
+    _openToolDaemonPresetSync = sync;
+    await sync.start();
+  }
+
+  Future<void> stopOpenToolDaemonPresetSync() async {
+    _openToolDaemonSyncApiKey = null;
+    _openToolDaemonPresetFilter = null;
+    final existing = _openToolDaemonPresetSync;
+    _openToolDaemonPresetSync = null;
+    await existing?.dispose();
+  }
+
+  DaemonToolSyncSnapshot getOpenToolDaemonPresetSyncSnapshot() {
+    final sync = _openToolDaemonPresetSync;
+    if (sync == null) {
+      return DaemonToolSyncSnapshot(
+        running: false,
+        host: _opentoolDaemonHost,
+        port: _opentoolDaemonPort,
+        revision: 0,
+        activeTools: const [],
+      );
+    }
+    return sync.snapshot();
   }
 
   void updateLlmModels(
@@ -646,7 +765,7 @@ class KernelService {
       client: liteAgentClient,
       llmConfig: llmConfig,
       pool: pool,
-      modeRef: _modeRef,
+      mode: () => _mode,
       modelProfiler: profiler,
       supervision: supervision,
       preference: _kernel.preference,
@@ -667,8 +786,8 @@ class KernelService {
         llmConfig: llmConfig,
         llmConfigResolver: _makeResolver(
           pool: pool,
-          purpose: 'summary',
-          modeRef: _modeRef,
+          purpose: 'memory_summary',
+          mode: () => _mode,
           profiler: profiler,
           supervision: supervision,
           runtimeConfig: _runtimeConfig,
@@ -709,7 +828,7 @@ class KernelService {
     );
     final embeddingsLlmConfig = embeddings.LLMConfig(
       baseUrl: candidate.baseUrl,
-      apiKey: candidate.apiKey,
+      apiKey: candidate.apiKey ?? '',
       model: _resolveEmbeddingsModel(config.model, candidate.model),
     );
 
@@ -768,6 +887,18 @@ class KernelService {
     );
   }
 
+  Future<void> _restartOpenToolDaemonPresetSync() async {
+    final daemonApiKey = _openToolDaemonSyncApiKey;
+    if (daemonApiKey == null) {
+      return;
+    }
+    await startOpenToolDaemonPresetSync(
+      daemonApiKey: daemonApiKey,
+      debounce: _openToolDaemonSyncDebounce,
+      presetFilter: _openToolDaemonPresetFilter,
+    );
+  }
+
   Map<String, ModelHealthSnapshot> getModelHealth() {
     final supervision = _kernel.supervision;
     if (supervision is AdaptiveSupervision) {
@@ -791,7 +922,7 @@ class KernelService {
         ? supervision.modelCatalog
         : const <String, KernelLlmModel>{};
     return pool.pickForPurpose(
-      mode: _modeRef.value,
+      mode: _mode,
       purpose: purpose,
       isAvailable: (candidate) {
         if (!_isModelAvailable(supervision, candidate)) {
@@ -1158,7 +1289,7 @@ class KernelService {
     required LiteAgentClient client,
     required LLMConfig llmConfig,
     required LlmConfigPool pool,
-    required _ModeRef modeRef,
+    required KernelMode Function() mode,
     required ModelProfiler? modelProfiler,
     required Supervision supervision,
     required Preference preference,
@@ -1173,7 +1304,7 @@ class KernelService {
       llmConfigResolver: _makeResolver(
         pool: pool,
         purpose: 'perception',
-        modeRef: modeRef,
+        mode: mode,
         profiler: modelProfiler,
         supervision: supervision,
         runtimeConfig: runtimeConfig,
@@ -1199,7 +1330,7 @@ class KernelService {
       llmConfigResolver: _makeResolver(
         pool: pool,
         purpose: 'planning',
-        modeRef: modeRef,
+        mode: mode,
         profiler: modelProfiler,
         supervision: supervision,
         runtimeConfig: runtimeConfig,
@@ -1215,7 +1346,7 @@ class KernelService {
       llmConfigResolver: _makeResolver(
         pool: pool,
         purpose: 'learning',
-        modeRef: modeRef,
+        mode: mode,
         profiler: modelProfiler,
         supervision: supervision,
         runtimeConfig: runtimeConfig,
@@ -1242,7 +1373,7 @@ class KernelService {
   static LlmConfigResolver _makeResolver({
     required LlmConfigPool pool,
     required String purpose,
-    required _ModeRef modeRef,
+    required KernelMode Function() mode,
     required ModelProfiler? profiler,
     required Supervision supervision,
     required KernelRuntimeConfig runtimeConfig,
@@ -1251,15 +1382,33 @@ class KernelService {
       final modelCatalog = supervision is AdaptiveSupervision
           ? supervision.modelCatalog
           : const <String, KernelLlmModel>{};
+      final activeMode = mode();
       final picked = pool.pickForPurpose(
-        mode: modeRef.value,
+        mode: activeMode,
         purpose: purpose,
         isAvailable: (candidate) => _isModelAvailable(supervision, candidate),
         profiler: profiler,
         modelCatalog: modelCatalog,
         successRateThreshold: runtimeConfig.profileSuccessRateThreshold,
       );
-      return picked ?? pool.pick();
+      if (picked != null) {
+        return picked;
+      }
+      final relaxed = pool.pickForPurpose(
+        mode: activeMode,
+        purpose: purpose,
+        isAvailable: (candidate) => _isModelAvailable(supervision, candidate),
+        profiler: profiler,
+        modelCatalog: modelCatalog,
+        successRateThreshold: runtimeConfig.profileSuccessRateThreshold,
+        allowProfilerSkip: false,
+      );
+      if (relaxed != null) {
+        return relaxed;
+      }
+      return pool.pick(
+        isAvailable: (candidate) => _isModelAvailable(supervision, candidate),
+      );
     };
   }
 
@@ -1516,9 +1665,334 @@ Future<String> _ensureDocsId(
   return created.docsId;
 }
 
-class _ModeRef {
-  KernelMode value;
-  _ModeRef(this.value);
+class _OpenToolDaemonPresetSync {
+  final String Function() hostProvider;
+  final int Function() portProvider;
+  final String daemonApiKey;
+  final Duration debounce;
+  final DaemonPresetFilter? presetFilter;
+  final Future<void> Function(List<PresetOpenSpec>) setPresetOpenSpecList;
+  final OpenToolDirectory Function() openToolDirectoryProvider;
+  final KernelLogger? logger;
+
+  StreamSubscription<ToolLifecycleEventDto>? _subscription;
+  Timer? _publishTimer;
+  bool _disposed = false;
+  int _revision = 0;
+  final Map<String, int> _toolEpochById = {};
+  final Map<String, _DaemonActiveTool> _activeTools = {};
+  final Set<String> _directoryToolIds = {};
+
+  _OpenToolDaemonPresetSync({
+    required this.hostProvider,
+    required this.portProvider,
+    required this.daemonApiKey,
+    required this.debounce,
+    required this.presetFilter,
+    required this.setPresetOpenSpecList,
+    required this.openToolDirectoryProvider,
+    this.logger,
+  });
+
+  Future<void> start() async {
+    await _subscription?.cancel();
+    final client = _client();
+    final stream = await client.subscribeToolEvents(
+      daemonApiKey: daemonApiKey,
+      snapshot: true,
+    );
+    _subscription = stream.listen(
+      (event) {
+        unawaited(_handleEvent(event));
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        logger?.error(
+          'OpenTool daemon preset sync stream failed.',
+          error,
+          data: {'stackTrace': stackTrace.toString()},
+        );
+      },
+    );
+  }
+
+  DaemonToolSyncSnapshot snapshot() {
+    final items = <DaemonToolSyncItem>[
+      for (final tool in _activeTools.values)
+        DaemonToolSyncItem(
+          toolId: tool.toolId,
+          alias: tool.alias,
+          status: tool.status,
+          endpoint: tool.serverUrl,
+          updatedAt: tool.updatedAt,
+        ),
+    ]..sort((a, b) => a.toolId.compareTo(b.toolId));
+    return DaemonToolSyncSnapshot(
+      running: !_disposed && _subscription != null,
+      host: hostProvider(),
+      port: portProvider(),
+      revision: _revision,
+      activeTools: items,
+    );
+  }
+
+  Future<void> republish() async {
+    _schedulePublish(immediate: true);
+    await _flushPendingPublish();
+  }
+
+  Future<void> dispose() async {
+    _disposed = true;
+    _publishTimer?.cancel();
+    _publishTimer = null;
+    await _subscription?.cancel();
+    _subscription = null;
+    _clearDirectoryTools();
+    try {
+      await setPresetOpenSpecList(const []);
+    } catch (_) {
+      // Ignore cleanup failures while shutting down the sync bridge.
+    }
+  }
+
+  Future<void> _handleEvent(ToolLifecycleEventDto event) async {
+    if (_disposed) {
+      return;
+    }
+    final toolId = event.tool.id;
+    final nextEpoch = (_toolEpochById[toolId] ?? 0) + 1;
+    _toolEpochById[toolId] = nextEpoch;
+
+    switch (event.type) {
+      case _DaemonToolLifecycleEventType.ready:
+        await _activateTool(toolId, nextEpoch);
+        return;
+      case _DaemonToolLifecycleEventType.snapshot:
+        if (event.tool.status == _DaemonToolStatusType.running) {
+          await _activateTool(toolId, nextEpoch);
+        } else {
+          _deactivateTool(toolId);
+        }
+        return;
+      case _DaemonToolLifecycleEventType.draining:
+      case _DaemonToolLifecycleEventType.unavailable:
+      case _DaemonToolLifecycleEventType.removed:
+        _deactivateTool(toolId);
+        return;
+    }
+  }
+
+  Future<void> _activateTool(String toolId, int epoch) async {
+    final client = _client();
+    try {
+      final toolList = await client.listToolWithApiKeys(
+        '1',
+        daemonApiKey: daemonApiKey,
+      );
+      ToolWithApiKeyDto? toolInfo;
+      for (final candidate in toolList) {
+        if (candidate.id == toolId) {
+          toolInfo = candidate;
+          break;
+        }
+      }
+      if (toolInfo == null ||
+          toolInfo.status != _DaemonToolStatusType.running) {
+        _deactivateTool(toolId);
+        return;
+      }
+      final spec = await client.loadTool(toolId);
+      if (spec == null) {
+        _deactivateTool(toolId);
+        return;
+      }
+      if (_disposed || _toolEpochById[toolId] != epoch) {
+        return;
+      }
+      _activeTools[toolId] = _DaemonActiveTool.fromLoaded(
+        toolInfo: toolInfo,
+        spec: spec,
+      );
+      _schedulePublish();
+    } catch (error, stackTrace) {
+      logger?.warn(
+        'OpenTool daemon preset sync failed to activate tool.',
+        data: {
+          'toolId': toolId,
+          'error': error.toString(),
+          'stackTrace': stackTrace.toString(),
+        },
+      );
+      if (_toolEpochById[toolId] == epoch) {
+        _deactivateTool(toolId);
+      }
+    }
+  }
+
+  void _deactivateTool(String toolId) {
+    final removed = _activeTools.remove(toolId);
+    if (removed != null ||
+        _directoryToolIds.contains(_directoryToolId(toolId))) {
+      _schedulePublish(immediate: true);
+    }
+  }
+
+  void _schedulePublish({bool immediate = false}) {
+    if (_disposed) {
+      return;
+    }
+    _publishTimer?.cancel();
+    final delay = immediate ? Duration.zero : debounce;
+    _publishTimer = Timer(delay, () {
+      unawaited(_publish());
+    });
+  }
+
+  Future<void> _flushPendingPublish() async {
+    final timer = _publishTimer;
+    if (timer == null) {
+      return;
+    }
+    if (timer.isActive) {
+      final completer = Completer<void>();
+      _publishTimer = Timer(Duration.zero, () async {
+        await _publish();
+        completer.complete();
+      });
+      await completer.future;
+    }
+  }
+
+  Future<void> _publish() async {
+    if (_disposed) {
+      return;
+    }
+    _publishTimer?.cancel();
+    _publishTimer = null;
+    _revision += 1;
+    final activeTools = _activeTools.values.toList()
+      ..sort((a, b) => a.toolId.compareTo(b.toolId));
+    final presetList = activeTools
+        .where((tool) => presetFilter?.call(tool.toPresetCandidate()) ?? true)
+        .map((tool) => tool.preset)
+        .toList();
+    final directory = openToolDirectoryProvider();
+    final nextDirectoryToolIds = <String>{};
+    for (final tool in activeTools) {
+      final directoryToolId = _directoryToolId(tool.toolId);
+      nextDirectoryToolIds.add(directoryToolId);
+      directory.registerRemote(
+        tool.spec,
+        toolId: directoryToolId,
+        serverUrl: tool.serverUrl,
+        apiKey: tool.apiKey,
+      );
+    }
+    for (final toolId in _directoryToolIds.difference(nextDirectoryToolIds)) {
+      directory.unregister(toolId);
+    }
+    _directoryToolIds
+      ..clear()
+      ..addAll(nextDirectoryToolIds);
+    await setPresetOpenSpecList(presetList);
+  }
+
+  void _clearDirectoryTools() {
+    final directory = openToolDirectoryProvider();
+    for (final toolId in _directoryToolIds) {
+      directory.unregister(toolId);
+    }
+    _directoryToolIds.clear();
+  }
+
+  DaemonClient _client() =>
+      DaemonClient(host: hostProvider(), port: portProvider());
+
+  String _directoryToolId(String toolId) => 'daemon:$toolId';
+}
+
+class _DaemonActiveTool {
+  final String toolId;
+  final String alias;
+  final String status;
+  final String apiKey;
+  final String serverUrl;
+  final OpenTool spec;
+  final PresetOpenSpec preset;
+  final DateTime updatedAt;
+
+  const _DaemonActiveTool({
+    required this.toolId,
+    required this.alias,
+    required this.status,
+    required this.apiKey,
+    required this.serverUrl,
+    required this.spec,
+    required this.preset,
+    required this.updatedAt,
+  });
+
+  factory _DaemonActiveTool.fromLoaded({
+    required ToolWithApiKeyDto toolInfo,
+    required OpenTool spec,
+  }) {
+    final serverUrl = 'http://${toolInfo.host}:${toolInfo.port}';
+    final specJson = jsonEncode(spec.toJson());
+    return _DaemonActiveTool(
+      toolId: toolInfo.id,
+      alias: toolInfo.alias,
+      status: toolInfo.status,
+      apiKey: toolInfo.apiKey,
+      serverUrl: serverUrl,
+      spec: spec,
+      preset: PresetOpenSpec(
+        systemPrompt: _buildSystemPrompt(spec),
+        openSpec: OpenSpec(
+          openSpec: specJson,
+          protocol: Protocol.opentool,
+          serverUrl: serverUrl,
+          apiKey: ApiKey(type: ApiKeyType.original, apiKey: toolInfo.apiKey),
+        ),
+      ),
+      updatedAt: DateTime.now().toUtc(),
+    );
+  }
+
+  DaemonPresetToolCandidate toPresetCandidate() {
+    return DaemonPresetToolCandidate(
+      toolId: toolId,
+      alias: alias,
+      status: status,
+      serverUrl: serverUrl,
+      spec: spec,
+    );
+  }
+
+  static String _buildSystemPrompt(OpenTool spec) {
+    final title = spec.info.title.trim();
+    final description = (spec.info.description ?? '').trim();
+    if (title.isEmpty && description.isEmpty) {
+      return 'Use this tool when its functions match the user request.';
+    }
+    if (description.isEmpty) {
+      return 'Use the "$title" tool when its functions match the user request.';
+    }
+    if (title.isEmpty) {
+      return 'Use this tool when needed: $description';
+    }
+    return 'Use the "$title" tool when needed: $description';
+  }
+}
+
+class _DaemonToolLifecycleEventType {
+  static const String ready = 'tool.ready';
+  static const String draining = 'tool.draining';
+  static const String unavailable = 'tool.unavailable';
+  static const String removed = 'tool.removed';
+  static const String snapshot = 'tool.snapshot';
+}
+
+class _DaemonToolStatusType {
+  static const String running = 'running';
 }
 
 class _ObservableJobManager implements JobManager {

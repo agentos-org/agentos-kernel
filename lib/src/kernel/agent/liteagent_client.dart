@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import '../logging/logger.dart';
+import 'config.dart';
 import 'model.dart';
 
 class LiteAgentClient {
@@ -28,8 +29,9 @@ class LiteAgentClient {
     required String userPrompt,
     required LlmCallContext context,
   }) async {
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(llmConfig);
     final session = await sdk.initSimple(
-      SimpleCapability(llmConfig: llmConfig, systemPrompt: systemPrompt),
+      SimpleCapability(llmConfig: effectiveConfig, systemPrompt: systemPrompt),
     );
     final task = UserTask(
       content: [Content(type: ContentType.text, message: userPrompt)],
@@ -54,8 +56,9 @@ class LiteAgentClient {
     required String userPrompt,
     required LlmCallContext context,
   }) async {
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(llmConfig);
     final session = await sdk.initSimple(
-      SimpleCapability(llmConfig: llmConfig, systemPrompt: systemPrompt),
+      SimpleCapability(llmConfig: effectiveConfig, systemPrompt: systemPrompt),
     );
     final task = UserTask(
       content: [Content(type: ContentType.text, message: userPrompt)],

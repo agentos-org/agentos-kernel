@@ -6,6 +6,7 @@ import 'package:opentool_dart/opentool_client.dart';
 
 import '../kernel.dart';
 import '../agent/llm_queue.dart';
+import '../agent/config.dart';
 import '../agent/model.dart';
 import '../logging/logger.dart';
 import '../perception/input.dart';
@@ -62,10 +63,11 @@ class PerceptionAgentRunner {
   }
 
   Future<void> _sendToAgent(_PerceptionContext context) async {
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(llmConfig);
     final modelKey = buildLlmModelKey(
-      baseUrl: llmConfig.baseUrl,
-      model: llmConfig.model,
-      apiKey: llmConfig.apiKey,
+      baseUrl: effectiveConfig.baseUrl,
+      model: effectiveConfig.model,
+      apiKey: effectiveConfig.apiKey,
     );
     await llmQueue.enqueue(
       purpose: 'perception_chat',
@@ -112,8 +114,9 @@ class PerceptionAgentRunner {
     if (existing != null) {
       return existing;
     }
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(llmConfig);
     final capability = Capability(
-      llmConfig: llmConfig,
+      llmConfig: effectiveConfig,
       systemPrompt: systemPrompt,
       callbackOpenTool: CallbackOpenTool(
         opentool: openToolJson ?? _defaultOpenToolJson(),

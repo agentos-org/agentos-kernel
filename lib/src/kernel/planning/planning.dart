@@ -193,7 +193,9 @@ class LiteAgentPlanning extends Planning {
     PreferenceSnapshot preference,
   ) async {
     final prompt = await _buildPrompt(percept, memory, preference);
-    final effectiveConfig = llmConfigResolver?.call() ?? llmConfig;
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(
+      llmConfigResolver?.call() ?? llmConfig,
+    );
     final modelKey = buildLlmModelKey(
       baseUrl: effectiveConfig.baseUrl,
       model: effectiveConfig.model,

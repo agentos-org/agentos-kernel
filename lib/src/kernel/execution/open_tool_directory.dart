@@ -55,6 +55,7 @@ class OpenToolDirectory {
     String? apiKey,
   }) {
     final id = _resolveToolId(tool, toolId);
+    _removeFunctionMappingsForTool(id);
     _byId[id] = tool;
     final url = serverUrl ?? tool.server?.url;
     if (url != null && url.isNotEmpty) {
@@ -65,6 +66,19 @@ class OpenToolDirectory {
     }
     _indexFunctions(id, tool.functions);
     return id;
+  }
+
+  bool unregister(String toolId) {
+    final local = _localHandlers.remove(toolId);
+    if (local != null) {
+      return false;
+    }
+    final removed = _byId.remove(toolId);
+    _apiKeys.remove(toolId);
+    _serverUrls.remove(toolId);
+    _clients.remove(toolId);
+    _removeFunctionMappingsForTool(toolId);
+    return removed != null;
   }
 
   bool updateRemoteEndpoint(

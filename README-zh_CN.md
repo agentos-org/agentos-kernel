@@ -59,6 +59,10 @@ dart run example/service_example.dart
   - 替换 LLM 模型列表（若之前未配置 LLM，将启用 LLM 组件）。
 - `setPresetOpenSpecList(List<PresetOpenSpec>)`
   - 更新 LiteAgent 的预置 OpenSpec 列表（初始化后由外部显式调用）。
+- `startOpenToolDaemonPresetSync({daemonApiKey, debounce, presetFilter})`
+  - 订阅 OpenTool daemon 的工具变化；默认同步全部 running 工具到 preset。
+  - 可通过 `presetFilter` 手工筛选哪些 daemon 工具进入 LiteAgent preset；
+    不匹配的工具仍会注册进 kernel 的 `OpenToolDirectory` 供规划/执行使用。
 - `setMode(KernelMode mode)` / `getMode()` → `KernelMode`
   - 运行时切换路由模式：`economy`（省电）、`balanced`（均衡，默认）、`performance`（性能）。
 

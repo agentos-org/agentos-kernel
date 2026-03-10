@@ -5,6 +5,19 @@ import 'model.dart';
 
 typedef LlmConfigResolver = LLMConfig Function();
 
+LLMConfig normalizeLlmConfigForLiteAgent(LLMConfig config) {
+  final apiKey = config.apiKey?.trim();
+  if (apiKey == config.apiKey) {
+    return config;
+  }
+  return LLMConfig(
+    baseUrl: config.baseUrl,
+    apiKey: (apiKey == null || apiKey.isEmpty) ? null : apiKey,
+    model: config.model,
+    contextWindowSize: config.contextWindowSize,
+  );
+}
+
 class LlmConfigHolder {
   LLMConfig _value;
 
@@ -27,38 +40,36 @@ class _PoolEntry {
   final LlmModelSource source;
   final String modelKey;
 
-  _PoolEntry({
-    required this.config,
-    required this.source,
-  }) : modelKey = buildLlmModelKey(
-         baseUrl: config.baseUrl,
-         model: config.model,
-         apiKey: config.apiKey ?? '',
-       );
+  _PoolEntry({required this.config, required this.source})
+    : modelKey = buildLlmModelKey(
+        baseUrl: config.baseUrl,
+        model: config.model,
+        apiKey: config.apiKey ?? '',
+      );
 }
 
 class LlmConfigPool {
   List<_PoolEntry> _entries;
 
   LlmConfigPool(List<LLMConfig> configs)
-      : _entries = configs
-            .map((c) => _PoolEntry(config: c, source: LlmModelSource.local))
-            .toList();
+    : _entries = configs
+          .map((c) => _PoolEntry(config: c, source: LlmModelSource.local))
+          .toList();
 
   LlmConfigPool.fromModels(List<KernelLlmModel> models)
-      : _entries = models
-            .map(
-              (m) => _PoolEntry(
-                config: LLMConfig(
-                  baseUrl: m.baseUrl,
-                  apiKey: m.apiKey ?? '',
-                  model: m.model,
-                  contextWindowSize: m.contextWindowSize,
-                ),
-                source: m.source,
+    : _entries = models
+          .map(
+            (m) => _PoolEntry(
+              config: LLMConfig(
+                baseUrl: m.baseUrl,
+                apiKey: m.apiKey ?? '',
+                model: m.model,
+                contextWindowSize: m.contextWindowSize,
               ),
-            )
-            .toList();
+              source: m.source,
+            ),
+          )
+          .toList();
 
   List<LLMConfig> get configs =>
       _entries.map((e) => e.config).toList(growable: false);
@@ -107,6 +118,7 @@ class LlmConfigPool {
     ModelProfiler? profiler,
     Map<String, KernelLlmModel>? modelCatalog,
     double successRateThreshold = 0.4,
+    bool allowProfilerSkip = true,
   }) {
     if (_entries.isEmpty) return null;
 
@@ -128,13 +140,8 @@ class LlmConfigPool {
           }
         }
 
-        if (mode == KernelMode.economy &&
-            e.source == LlmModelSource.remote &&
-            purpose != 'planning') {
-          return false;
-        }
-
         if (profiler != null &&
+            allowProfilerSkip &&
             mode != KernelMode.economy &&
             profiler.shouldSkip(
               modelKey: e.modelKey,

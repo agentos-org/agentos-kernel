@@ -14,17 +14,17 @@ class DriftMemory implements Memory {
   Future<void>? _openFuture;
 
   DriftMemory(this._executor, {int summaryLimit = 5})
-      : _summaryLimit = summaryLimit;
+    : _summaryLimit = summaryLimit;
 
-  factory DriftMemory.open({
-    required String path,
-    int summaryLimit = 5,
-  }) {
+  factory DriftMemory.open({required String path, int summaryLimit = 5}) {
     return DriftMemory(_openConnection(path), summaryLimit: summaryLimit);
   }
 
   Future<void> _ensureOpen() {
-    _openFuture ??= _executor.ensureOpen(_user);
+    _openFuture ??= () async {
+      await _executor.ensureOpen(_user);
+      await _user.ensureInitialized(_executor);
+    }();
     return _openFuture!;
   }
 
@@ -38,10 +38,7 @@ class DriftMemory implements Memory {
       return MemorySnapshot(scope: scope, records: records);
     }
     final summaryEnd = _maxTimestamp(summaries);
-    final detailRows = await _listDetailRows(
-      scope: scope,
-      after: summaryEnd,
-    );
+    final detailRows = await _listDetailRows(scope: scope, after: summaryEnd);
     final detailRecords = detailRows.map(_recordFromRow).toList();
     final combined = [...summaries, ...detailRecords];
     combined.sort((a, b) => a.timestamp.compareTo(b.timestamp));
@@ -121,14 +118,11 @@ INSERT INTO memory_records (
       where.add('user_id = ?');
       args.add(userId);
     }
-    final rows = await _executor.runSelect(
-      '''
+    final rows = await _executor.runSelect('''
 SELECT MAX(timestamp) AS max_ts
 FROM memory_records
 WHERE ${where.join(' AND ')};
-''',
-      args,
-    );
+''', args);
     if (rows.isEmpty) {
       return null;
     }
@@ -141,15 +135,12 @@ WHERE ${where.join(' AND ')};
 
   Future<List<String>> listScopes() async {
     await _ensureOpen();
-    final rows = await _executor.runSelect(
-      '''
+    final rows = await _executor.runSelect('''
 SELECT DISTINCT scope
 FROM memory_records
 WHERE scope IS NOT NULL AND scope != ''
 ORDER BY scope ASC;
-''',
-      const [],
-    );
+''', const []);
     return rows
         .map((row) => row['scope'])
         .whereType<String>()
@@ -178,8 +169,7 @@ ORDER BY scope ASC;
       args.add(userId);
     }
     final limitClause = (limit == null || limit <= 0) ? '' : 'LIMIT $limit';
-    final rows = await _executor.runSelect(
-      '''
+    final rows = await _executor.runSelect('''
 SELECT
   job_id,
   user_id,
@@ -192,17 +182,14 @@ FROM memory_records
 WHERE ${where.join(' AND ')}
 ORDER BY timestamp DESC
 $limitClause;
-''',
-      args,
-    );
+''', args);
     final summaries = _listSummariesSync(rows);
     return summaries..sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
 
   Future<List<Map<String, Object?>>> _listAllRows({String? scope}) {
     if (scope == null || scope.isEmpty) {
-      return _executor.runSelect(
-        '''
+      return _executor.runSelect('''
 SELECT
   job_id,
   user_id,
@@ -213,9 +200,7 @@ SELECT
   timestamp
 FROM memory_records
 ORDER BY timestamp ASC;
-''',
-        const [],
-      );
+''', const []);
     }
     return _executor.runSelect(
       '''
@@ -265,11 +250,9 @@ ORDER BY timestamp ASC;
       where.add('timestamp <= ?');
       args.add(before.millisecondsSinceEpoch);
     }
-    final whereClause =
-        where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
     final limitClause = (limit == null || limit <= 0) ? '' : 'LIMIT $limit';
-    return _executor.runSelect(
-      '''
+    return _executor.runSelect('''
 SELECT
   job_id,
   user_id,
@@ -282,9 +265,7 @@ FROM memory_records
 $whereClause
 ORDER BY timestamp ASC
 $limitClause;
-''',
-      args,
-    );
+''', args);
   }
 
   DateTime _maxTimestamp(List<MemoryRecord> records) {
@@ -317,12 +298,7 @@ $limitClause;
     try {
       return jsonEncode(data);
     } catch (error) {
-      return jsonEncode(
-        {
-          '_raw': data.toString(),
-          '_error': error.toString(),
-        },
-      );
+      return jsonEncode({'_raw': data.toString(), '_error': error.toString()});
     }
   }
 
@@ -349,22 +325,16 @@ $limitClause;
     return _MemoryExtras(
       bundleId: _stringFromKeys(data, const ['bundleId', 'bundle_id']),
       taskId: _stringFromKeys(data, const ['taskId', 'task_id']),
-      liteAgentSessionId: _stringFromKeys(
-        data,
-        const [
-          'liteAgentSessionId',
-          'liteagentSessionId',
-          'liteagent_session_id',
-        ],
-      ),
+      liteAgentSessionId: _stringFromKeys(data, const [
+        'liteAgentSessionId',
+        'liteagentSessionId',
+        'liteagent_session_id',
+      ]),
       messageIndex: _intFromKeys(data, const ['messageIndex', 'message_index']),
     );
   }
 
-  String? _stringFromKeys(
-    Map<String, dynamic> data,
-    List<String> keys,
-  ) {
+  String? _stringFromKeys(Map<String, dynamic> data, List<String> keys) {
     for (final key in keys) {
       final value = data[key];
       if (value is String && value.trim().isNotEmpty) {
@@ -409,13 +379,27 @@ class _MemoryExtras {
 }
 
 class _MemoryDbUser implements QueryExecutorUser {
+  Future<void>? _initFuture;
+
   @override
   int get schemaVersion => 1;
 
   @override
-  Future<void> beforeOpen(QueryExecutor executor, OpeningDetails details) async {
-    await executor.runCustom(
-      '''
+  Future<void> beforeOpen(
+    QueryExecutor executor,
+    OpeningDetails details,
+  ) async {
+    // Drift may call beforeOpen before the executor is considered open.
+    // We run schema setup after ensureOpen() completes.
+  }
+
+  Future<void> ensureInitialized(QueryExecutor executor) {
+    _initFuture ??= _createSchema(executor);
+    return _initFuture!;
+  }
+
+  Future<void> _createSchema(QueryExecutor executor) async {
+    await executor.runCustom('''
 CREATE TABLE IF NOT EXISTS memory_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   job_id TEXT NOT NULL,
@@ -430,50 +414,35 @@ CREATE TABLE IF NOT EXISTS memory_records (
   liteagent_session_id TEXT,
   message_index INTEGER
 );
-''',
-    );
-    await executor.runCustom(
-      '''
+''');
+    await executor.runCustom('''
 CREATE INDEX IF NOT EXISTS memory_records_scope_ts
   ON memory_records (scope, timestamp);
-''',
-    );
-    await executor.runCustom(
-      '''
+''');
+    await executor.runCustom('''
 CREATE INDEX IF NOT EXISTS memory_records_scope_type_ts
   ON memory_records (scope, type, timestamp);
-''',
-    );
-    await executor.runCustom(
-      '''
+''');
+    await executor.runCustom('''
 CREATE INDEX IF NOT EXISTS memory_records_user_ts
   ON memory_records (user_id, timestamp);
-''',
-    );
-    await executor.runCustom(
-      '''
+''');
+    await executor.runCustom('''
 CREATE INDEX IF NOT EXISTS memory_records_session_ts
   ON memory_records (session_id, timestamp);
-''',
-    );
-    await executor.runCustom(
-      '''
+''');
+    await executor.runCustom('''
 CREATE INDEX IF NOT EXISTS memory_records_bundle_ts
   ON memory_records (bundle_id, timestamp);
-''',
-    );
-    await executor.runCustom(
-      '''
+''');
+    await executor.runCustom('''
 CREATE INDEX IF NOT EXISTS memory_records_task_id
   ON memory_records (task_id);
-''',
-    );
-    await executor.runCustom(
-      '''
+''');
+    await executor.runCustom('''
 CREATE INDEX IF NOT EXISTS memory_records_liteagent_session_ts
   ON memory_records (liteagent_session_id, timestamp);
-''',
-    );
+''');
   }
 }
 

@@ -59,6 +59,12 @@ Model Configuration:
   - Replace the LLM model list (and enable LLM components if they were not configured).
 - `setPresetOpenSpecList(List<PresetOpenSpec>)`
   - Update LiteAgent preset OpenSpec list (called explicitly by external code after init).
+- `startOpenToolDaemonPresetSync({daemonApiKey, debounce, presetFilter})`
+  - Subscribe to OpenTool daemon tool changes; by default all running tools are
+    synchronized into the LiteAgent preset list.
+  - Use `presetFilter` to manually choose which daemon tools enter LiteAgent
+    presets; filtered-out tools are still registered in the kernel
+    `OpenToolDirectory` for planning/execution.
 - `setMode(KernelMode mode)` / `getMode()` → `KernelMode`
   - Switch the active routing mode at runtime: `economy`, `balanced` (default), or `performance`.
 

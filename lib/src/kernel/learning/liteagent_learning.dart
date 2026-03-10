@@ -35,7 +35,9 @@ class LiteAgentLearning implements Learning {
     if (record.userId == null || record.userId!.trim().isEmpty) {
       return;
     }
-    final effectiveConfig = llmConfigResolver?.call() ?? llmConfig;
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(
+      llmConfigResolver?.call() ?? llmConfig,
+    );
     final modelKey = buildLlmModelKey(
       baseUrl: effectiveConfig.baseUrl,
       model: effectiveConfig.model,
