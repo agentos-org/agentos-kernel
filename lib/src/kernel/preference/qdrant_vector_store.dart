@@ -13,11 +13,11 @@ class QdrantVectorStore implements VectorStore {
     required String baseUrl,
     required this.collection,
     http.Client? client,
-  })  : _client = client ?? http.Client(),
-        _baseUri = Uri.parse(baseUrl);
+  }) : _client = client ?? http.Client(),
+       _baseUri = Uri.parse(baseUrl);
 
   @override
-  Future<void> upsert({
+  Future<String> upsert({
     required String id,
     required List<double> vector,
     Map<String, dynamic>? payload,
@@ -40,6 +40,25 @@ class QdrantVectorStore implements VectorStore {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw StateError('Qdrant upsert failed: ${response.statusCode}');
     }
+    return id;
+  }
+
+  @override
+  Future<void> delete(String id) async {
+    final uri = _baseUri.replace(
+      path: '/collections/$collection/points/delete',
+    );
+    final body = jsonEncode({
+      'points': [id],
+    });
+    final response = await _client.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: body,
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw StateError('Qdrant delete failed: ${response.statusCode}');
+    }
   }
 
   @override
@@ -47,7 +66,9 @@ class QdrantVectorStore implements VectorStore {
     required List<double> vector,
     int limit = 5,
   }) async {
-    final uri = _baseUri.replace(path: '/collections/$collection/points/search');
+    final uri = _baseUri.replace(
+      path: '/collections/$collection/points/search',
+    );
     final body = jsonEncode({
       'vector': vector,
       'limit': limit,

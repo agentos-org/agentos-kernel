@@ -36,15 +36,8 @@ class HivePreference implements Preference {
     final record = _box.get(signal.userId) ?? <String, dynamic>{};
     final signals =
         (record['signals'] as List<dynamic>?)?.toList() ?? <dynamic>[];
-    signals.add(_signalToMap(signal));
-    if (signals.length > signalRetention) {
-      signals.removeAt(0);
-    }
-    record['signals'] = signals;
-    record.putIfAbsent('preferences', () => <String, dynamic>{});
-    await _box.put(signal.userId, record);
-    final embedding = signal.embedding ?? _embedder.embed(signal.text);
-    await _vectorStore.upsert(
+    final embedding = _embedder.embed(signal.text);
+    final indexId = await _vectorStore.upsert(
       id: '${signal.userId}-${signal.timestamp.microsecondsSinceEpoch}',
       vector: embedding,
       payload: {
@@ -54,6 +47,14 @@ class HivePreference implements Preference {
         'timestamp': signal.timestamp.toIso8601String(),
       },
     );
+    signals.add(_signalToMap(signal, indexId: indexId));
+    if (signals.length > signalRetention) {
+      final removed = signals.removeAt(0);
+      await _deleteIndexedSignal(removed);
+    }
+    record['signals'] = signals;
+    record.putIfAbsent('preferences', () => <String, dynamic>{});
+    await _box.put(signal.userId, record);
   }
 
   @override
@@ -82,17 +83,57 @@ class HivePreference implements Preference {
     if (!preferences.containsKey(key)) {
       return;
     }
+    final signals =
+        (record['signals'] as List<dynamic>?)?.toList() ?? <dynamic>[];
+    final retainedSignals = <dynamic>[];
+    final removedSignals = <dynamic>[];
+    for (final signal in signals) {
+      if (_signalMatchesPreferenceKey(signal, key)) {
+        removedSignals.add(signal);
+      } else {
+        retainedSignals.add(signal);
+      }
+    }
+    for (final signal in removedSignals) {
+      await _deleteIndexedSignal(signal);
+    }
     preferences.remove(key);
     record['preferences'] = preferences;
+    record['signals'] = retainedSignals;
     await _box.put(userId, record);
   }
 
-  Map<String, dynamic> _signalToMap(PreferenceSignal signal) {
+  Map<String, dynamic> _signalToMap(
+    PreferenceSignal signal, {
+    String? indexId,
+  }) {
     return {
       'userId': signal.userId,
       'text': signal.text,
       'metadata': signal.metadata,
       'timestamp': signal.timestamp,
+      if (indexId != null) 'indexId': indexId,
     };
+  }
+
+  bool _signalMatchesPreferenceKey(Object? signal, String key) {
+    if (signal is! Map) {
+      return false;
+    }
+    final metadata = signal['metadata'];
+    if (metadata is! Map<String, dynamic>) {
+      return false;
+    }
+    return preferenceSignalKeys(metadata).contains(key);
+  }
+
+  Future<void> _deleteIndexedSignal(Object? signal) async {
+    if (signal is! Map) {
+      return;
+    }
+    final indexId = signal['indexId'];
+    if (indexId is String && indexId.trim().isNotEmpty) {
+      await _vectorStore.delete(indexId);
+    }
   }
 }

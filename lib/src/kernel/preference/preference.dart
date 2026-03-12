@@ -28,7 +28,6 @@ class InMemoryPreference extends Preference {
         (prefs['signals'] as List<dynamic>?)?.toList() ?? <dynamic>[];
     signals.add({
       'text': signal.text,
-      'embedding': signal.embedding,
       'metadata': signal.metadata,
       'timestamp': signal.timestamp,
     });
@@ -50,5 +49,22 @@ class InMemoryPreference extends Preference {
     }
     final prefs = _preferences[userId];
     prefs?.remove(key);
+    final signals = (prefs?['signals'] as List<dynamic>?)?.toList();
+    if (signals == null) {
+      return;
+    }
+    signals.removeWhere((signal) => _signalMatchesPreferenceKey(signal, key));
+    prefs!['signals'] = signals;
+  }
+
+  bool _signalMatchesPreferenceKey(Object? signal, String key) {
+    if (signal is! Map) {
+      return false;
+    }
+    final metadata = signal['metadata'];
+    if (metadata is! Map<String, dynamic>) {
+      return false;
+    }
+    return preferenceSignalKeys(metadata).contains(key);
   }
 }

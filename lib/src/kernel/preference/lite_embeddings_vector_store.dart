@@ -1,4 +1,5 @@
-import 'package:lite_embeddings_sdk_dart/lite_embeddings_sdk_dart.dart' as embeddings;
+import 'package:lite_embeddings_sdk_dart/lite_embeddings_sdk_dart.dart'
+    as embeddings;
 
 import 'vector_store.dart';
 
@@ -14,7 +15,7 @@ class LiteEmbeddingsVectorStore implements TextQueryVectorStore {
   });
 
   @override
-  Future<void> upsert({
+  Future<String> upsert({
     required String id,
     required List<double> vector,
     Map<String, dynamic>? payload,
@@ -29,15 +30,20 @@ class LiteEmbeddingsVectorStore implements TextQueryVectorStore {
       if (payload != null) ...payload,
       'id': id,
     };
-    await client.insertSegment(
+    final result = await client.insertSegment(
       embeddings.InsertSegmentRequest(
         docsId: docsId,
-        segment: embeddings.Segment(
-          text: text,
-          metadata: metadata,
-        ),
+        segment: embeddings.Segment(text: text, metadata: metadata),
         llmConfig: llmConfig,
       ),
+    );
+    return result.segmentId;
+  }
+
+  @override
+  Future<void> delete(String id) async {
+    await client.deleteSegment(
+      embeddings.DeleteSegmentRequest(docsId: docsId, segmentId: id),
     );
   }
 
@@ -52,10 +58,7 @@ class LiteEmbeddingsVectorStore implements TextQueryVectorStore {
   }
 
   @override
-  Future<List<VectorMatch>> queryByText(
-    String text, {
-    int limit = 5,
-  }) async {
+  Future<List<VectorMatch>> queryByText(String text, {int limit = 5}) async {
     final result = await client.queryDocs(
       embeddings.QueryRequest(
         docsId: docsId,
@@ -64,17 +67,19 @@ class LiteEmbeddingsVectorStore implements TextQueryVectorStore {
         llmConfig: llmConfig,
       ),
     );
-    return result.segmentResultList.map((segment) {
-      final payload = <String, dynamic>{
-        if (segment.metadata != null) ...segment.metadata!,
-      };
-      payload.putIfAbsent('text', () => segment.text);
-      payload['distance'] = segment.distance;
-      return VectorMatch(
-        id: segment.segmentId,
-        score: -segment.distance,
-        payload: payload.isEmpty ? null : payload,
-      );
-    }).toList(growable: false);
+    return result.segmentResultList
+        .map((segment) {
+          final payload = <String, dynamic>{
+            if (segment.metadata != null) ...segment.metadata!,
+          };
+          payload.putIfAbsent('text', () => segment.text);
+          payload['distance'] = segment.distance;
+          return VectorMatch(
+            id: segment.segmentId,
+            score: -segment.distance,
+            payload: payload.isEmpty ? null : payload,
+          );
+        })
+        .toList(growable: false);
   }
 }

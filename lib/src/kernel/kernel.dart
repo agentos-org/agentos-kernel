@@ -473,12 +473,10 @@ class Kernel {
       if (signalMap is Map) {
         final text = signalMap['text'];
         if (text is String && text.isNotEmpty) {
-          final embedding = _parseEmbedding(signalMap['embedding']);
           await preference.recordSignal(
             PreferenceSignal(
               userId: userId,
               text: text,
-              embedding: embedding,
               metadata: signalMap['metadata'] as Map<String, dynamic>?,
             ),
           );
@@ -500,16 +498,6 @@ class Kernel {
     } catch (error) {
       logger?.error('Failed to record preference signal.', error);
     }
-  }
-
-  List<double>? _parseEmbedding(Object? embedding) {
-    if (embedding is List) {
-      return embedding
-          .whereType<num>()
-          .map((value) => value.toDouble())
-          .toList(growable: false);
-    }
-    return null;
   }
 
   Future<void> _recordToolEvent(
