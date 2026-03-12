@@ -88,10 +88,11 @@ class HivePreference implements Preference {
     final retainedSignals = <dynamic>[];
     final removedSignals = <dynamic>[];
     for (final signal in signals) {
-      if (_signalMatchesPreferenceKey(signal, key)) {
+      final updatedSignal = _removePreferenceKeyFromSignal(signal, key);
+      if (updatedSignal == null) {
         removedSignals.add(signal);
       } else {
-        retainedSignals.add(signal);
+        retainedSignals.add(updatedSignal);
       }
     }
     for (final signal in removedSignals) {
@@ -116,15 +117,54 @@ class HivePreference implements Preference {
     };
   }
 
-  bool _signalMatchesPreferenceKey(Object? signal, String key) {
+  Map<String, dynamic>? _removePreferenceKeyFromSignal(
+    Object? signal,
+    String key,
+  ) {
     if (signal is! Map) {
-      return false;
+      return null;
     }
-    final metadata = signal['metadata'];
+    final signalMap = Map<String, dynamic>.from(signal);
+    final metadata = signalMap['metadata'];
     if (metadata is! Map<String, dynamic>) {
-      return false;
+      return signalMap;
     }
-    return preferenceSignalKeys(metadata).contains(key);
+    final nextMetadata = _removePreferenceKeyFromMetadata(metadata, key);
+    if (nextMetadata == null) {
+      return null;
+    }
+    signalMap['metadata'] = nextMetadata;
+    return signalMap;
+  }
+
+  Map<String, dynamic>? _removePreferenceKeyFromMetadata(
+    Map<String, dynamic> metadata,
+    String key,
+  ) {
+    final nextMetadata = Map<String, dynamic>.from(metadata);
+    final singleKey = nextMetadata['preferenceKey'];
+    if (singleKey is String && singleKey.trim() == key) {
+      nextMetadata.remove('preferenceKey');
+    }
+
+    final multipleKeys = nextMetadata['preferenceKeys'];
+    if (multipleKeys is List) {
+      final retainedKeys = multipleKeys
+          .whereType<String>()
+          .map((item) => item.trim())
+          .where((item) => item.isNotEmpty && item != key)
+          .toList(growable: false);
+      if (retainedKeys.isEmpty) {
+        nextMetadata.remove('preferenceKeys');
+      } else {
+        nextMetadata['preferenceKeys'] = retainedKeys;
+      }
+    }
+
+    if (preferenceSignalKeys(nextMetadata).isEmpty) {
+      return null;
+    }
+    return nextMetadata;
   }
 
   Future<void> _deleteIndexedSignal(Object? signal) async {

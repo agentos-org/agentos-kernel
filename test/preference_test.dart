@@ -62,6 +62,55 @@ void main() {
       expect(vectorStore.deletedIds, hasLength(1));
       expect(vectorStore.deletedIds.single, vectorStore.upsertedIds.first);
     });
+
+    test('keeps multi-key signal until all linked keys are removed', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'hive-preference-test-',
+      );
+      Hive.init(tempDir.path);
+      final box = await Hive.openBox<Map>('preferences-multi');
+      addTearDown(() async {
+        await box.close();
+        await Hive.deleteBoxFromDisk('preferences-multi');
+        await tempDir.delete(recursive: true);
+      });
+
+      final vectorStore = _FakeTextQueryVectorStore();
+      final preference = HivePreference(box: box, vectorStore: vectorStore);
+
+      await preference.recordSignal(
+        PreferenceSignal(
+          userId: 'u1',
+          text: 'Use concise Chinese replies',
+          metadata: const {
+            'preferenceKeys': ['responseStyle', 'language'],
+          },
+        ),
+      );
+
+      await box.put('u1', {
+        'preferences': {'responseStyle': 'concise', 'language': 'zh-CN'},
+        'signals': box.get('u1')?['signals'],
+      });
+
+      await preference.deletePreferenceKey('responseStyle', userId: 'u1');
+
+      var record = box.get('u1');
+      var signals = (record?['signals'] as List?) ?? const [];
+      expect(signals, hasLength(1));
+      expect(((signals.single as Map)['metadata'] as Map)['preferenceKeys'], [
+        'language',
+      ]);
+      expect(vectorStore.deletedIds, isEmpty);
+
+      await preference.deletePreferenceKey('language', userId: 'u1');
+
+      record = box.get('u1');
+      signals = (record?['signals'] as List?) ?? const [];
+      expect(signals, isEmpty);
+      expect(vectorStore.deletedIds, hasLength(1));
+      expect(vectorStore.deletedIds.single, vectorStore.upsertedIds.single);
+    });
   });
 }
 
