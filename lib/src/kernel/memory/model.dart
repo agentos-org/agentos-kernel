@@ -7,11 +7,12 @@ class MemorySnapshot {
     this.scope,
     Map<String, dynamic>? data,
     List<MemoryRecord>? records,
-  })  : data = data ?? const {},
-        records = records ?? const [];
+  }) : data = data ?? const {},
+       records = records ?? const [];
 }
 
 class MemoryRecord {
+  final String? id;
   final String jobId;
   final String? userId;
   final String? sessionId;
@@ -21,6 +22,7 @@ class MemoryRecord {
   final DateTime timestamp;
 
   const MemoryRecord({
+    this.id,
     required this.jobId,
     this.userId,
     this.sessionId,

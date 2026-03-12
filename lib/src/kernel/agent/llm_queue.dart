@@ -156,6 +156,16 @@ class LlmQueue {
           error: null,
         );
         supervision.onLlmCompleted(metrics);
+        logger?.log(
+          _LlmQueueEvent('LLM_DONE', item.meta, timestamp: metrics.doneAt),
+          data: {
+            'purpose': item.meta.purpose,
+            'priority': item.meta.priority,
+            'modelKey': item.meta.modelKey,
+            'totalTokens': metrics.totalTokens,
+            'ttftMs': metrics.ttft?.inMilliseconds,
+          },
+        );
         item.completer.complete(result);
       } catch (error) {
         final metrics = _buildMetrics(
@@ -166,6 +176,16 @@ class LlmQueue {
           error: error.toString(),
         );
         supervision.onLlmCompleted(metrics);
+        logger?.log(
+          _LlmQueueEvent('LLM_FAILED', item.meta, timestamp: metrics.doneAt),
+          data: {
+            'purpose': item.meta.purpose,
+            'priority': item.meta.priority,
+            'modelKey': item.meta.modelKey,
+            'error': metrics.error,
+            'ttftMs': metrics.ttft?.inMilliseconds,
+          },
+        );
         item.completer.completeError(error);
       } finally {
         _inFlight -= 1;

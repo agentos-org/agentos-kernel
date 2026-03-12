@@ -1078,6 +1078,66 @@ class KernelService {
     return _kernel.preference.getSnapshot(userId: userId);
   }
 
+  /// List memory records for management UI.
+  ///
+  /// Returns paged summary records with deletion ids.
+  Future<List<MemoryRecordListItem>> listMemoryRecords({
+    int pageNum = 0,
+    int pageSize = 50,
+  }) async {
+    if (pageNum < 0) {
+      throw ArgumentError.value(pageNum, 'pageNum', 'must be non-negative');
+    }
+    if (pageSize <= 0) {
+      throw ArgumentError.value(pageSize, 'pageSize', 'must be positive');
+    }
+    final records = await _kernel.memory.listRecords(
+      type: 'MEMORY_SUMMARY',
+      includeSummaries: true,
+      offset: pageNum * pageSize,
+      limit: pageSize,
+    );
+    return records
+        .where((record) => record.id != null)
+        .map(
+          (record) => MemoryRecordListItem(
+            id: record.id!,
+            text: _memorySummaryText(record),
+            timestamp: record.timestamp,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> deleteMemoryRecord(String id) {
+    return _kernel.memory.deleteRecord(id);
+  }
+
+  /// List preference entries for management UI.
+  Future<List<PreferenceListItem>> listPreferenceItems({
+    String userId = _defaultUserId,
+  }) async {
+    final preferences = await _kernel.preference.listPreferences(
+      userId: userId,
+    );
+    return preferences.entries
+        .where((entry) => entry.key != 'signals')
+        .map(
+          (entry) => PreferenceListItem(
+            key: entry.key,
+            text: _preferenceItemText(entry.key, entry.value),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> deletePreferenceKey(String key, {String? userId}) {
+    return _kernel.preference.deletePreferenceKey(
+      key,
+      userId: userId ?? _defaultUserId,
+    );
+  }
+
   /// Suggest next action when there is no user input.
   ///
   /// [source] identifies the caller or channel.
@@ -1302,6 +1362,7 @@ class KernelService {
       client: client,
       llmConfig: llmConfig,
       llmConfigResolver: _makeResolver(
+        llmQueue: llmQueue,
         pool: pool,
         purpose: 'perception',
         mode: mode,
@@ -1371,6 +1432,7 @@ class KernelService {
   }
 
   static LlmConfigResolver _makeResolver({
+    LlmQueue? llmQueue,
     required LlmConfigPool pool,
     required String purpose,
     required KernelMode Function() mode,
@@ -1386,7 +1448,14 @@ class KernelService {
       final picked = pool.pickForPurpose(
         mode: activeMode,
         purpose: purpose,
-        isAvailable: (candidate) => _isModelAvailable(supervision, candidate),
+        isAvailable: (candidate) =>
+            _isModelAvailable(supervision, candidate) &&
+            _hasQueueCapacity(
+              supervision: supervision,
+              llmQueue: llmQueue,
+              candidate: candidate,
+              requireCapacity: purpose == 'perception',
+            ),
         profiler: profiler,
         modelCatalog: modelCatalog,
         successRateThreshold: runtimeConfig.profileSuccessRateThreshold,
@@ -1397,7 +1466,14 @@ class KernelService {
       final relaxed = pool.pickForPurpose(
         mode: activeMode,
         purpose: purpose,
-        isAvailable: (candidate) => _isModelAvailable(supervision, candidate),
+        isAvailable: (candidate) =>
+            _isModelAvailable(supervision, candidate) &&
+            _hasQueueCapacity(
+              supervision: supervision,
+              llmQueue: llmQueue,
+              candidate: candidate,
+              requireCapacity: purpose == 'perception',
+            ),
         profiler: profiler,
         modelCatalog: modelCatalog,
         successRateThreshold: runtimeConfig.profileSuccessRateThreshold,
@@ -1407,9 +1483,38 @@ class KernelService {
         return relaxed;
       }
       return pool.pick(
-        isAvailable: (candidate) => _isModelAvailable(supervision, candidate),
+        isAvailable: (candidate) =>
+            _isModelAvailable(supervision, candidate) &&
+            _hasQueueCapacity(
+              supervision: supervision,
+              llmQueue: llmQueue,
+              candidate: candidate,
+              requireCapacity: purpose == 'perception',
+            ),
       );
     };
+  }
+
+  static bool _hasQueueCapacity({
+    required Supervision supervision,
+    required LlmQueue? llmQueue,
+    required LLMConfig candidate,
+    required bool requireCapacity,
+  }) {
+    if (!requireCapacity) {
+      return true;
+    }
+    if (llmQueue == null) {
+      return true;
+    }
+    final key = buildLlmModelKey(
+      baseUrl: candidate.baseUrl,
+      model: candidate.model,
+      apiKey: candidate.apiKey ?? '',
+    );
+    final snapshot = llmQueue.snapshotForModel(key);
+    final maxConcurrency = supervision.recommendedLlmConcurrency(snapshot, key);
+    return maxConcurrency > 0 && snapshot.inFlight < maxConcurrency;
   }
 
   Map<String, dynamic>? _mergeContent(
@@ -1480,6 +1585,68 @@ class KernelService {
     final combined = [...summarySlice, ...detailSlice];
     combined.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return combined;
+  }
+
+  String _memorySummaryText(MemoryRecord record) {
+    final data = record.data;
+    if (data != null) {
+      final summaryText = _firstNonEmptyString(const ['summaryText'], data);
+      if (summaryText != null) {
+        return summaryText;
+      }
+      final keyFacts = data['keyFacts'];
+      if (keyFacts is List) {
+        final text = keyFacts
+            .map((item) => item is String ? item.trim() : '')
+            .where((item) => item.isNotEmpty)
+            .join('\n');
+        if (text.isNotEmpty) {
+          return text;
+        }
+      }
+    }
+    return 'Memory summary';
+  }
+
+  String _preferenceItemText(String key, Object? value) {
+    if (value is String && value.trim().isNotEmpty) {
+      return value;
+    }
+    if (value is List) {
+      final text = value
+          .map((item) => item is String ? item.trim() : '')
+          .where((item) => item.isNotEmpty)
+          .join(', ');
+      if (text.isNotEmpty) {
+        return text;
+      }
+    }
+    final encoded = _encodeCompactJson(value);
+    if (encoded != null && encoded.isNotEmpty) {
+      return '$key: $encoded';
+    }
+    return key;
+  }
+
+  String? _firstNonEmptyString(List<String> keys, Map<String, dynamic> data) {
+    for (final key in keys) {
+      final value = data[key];
+      if (value is String && value.trim().isNotEmpty) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  String? _encodeCompactJson(Object? value) {
+    if (value == null) {
+      return null;
+    }
+    try {
+      return jsonEncode(value);
+    } catch (_) {
+      return value.toString();
+    }
   }
 
   AppCalledTool _ensureAppCalledTool() {

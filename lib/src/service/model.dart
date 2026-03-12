@@ -8,6 +8,25 @@ class KernelSources {
   const KernelSources._();
 }
 
+class MemoryRecordListItem {
+  final String id;
+  final String text;
+  final DateTime timestamp;
+
+  const MemoryRecordListItem({
+    required this.id,
+    required this.text,
+    required this.timestamp,
+  });
+}
+
+class PreferenceListItem {
+  final String key;
+  final String text;
+
+  const PreferenceListItem({required this.key, required this.text});
+}
+
 class DaemonToolSyncItem {
   final String toolId;
   final String alias;

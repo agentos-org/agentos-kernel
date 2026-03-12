@@ -16,9 +16,9 @@ class HivePreference implements Preference {
     required VectorStore vectorStore,
     PreferenceEmbedder? embedder,
     this.signalRetention = 50,
-  })  : _box = box,
-        _vectorStore = vectorStore,
-        _embedder = embedder ?? HashEmbedder();
+  }) : _box = box,
+       _vectorStore = vectorStore,
+       _embedder = embedder ?? HashEmbedder();
 
   @override
   Future<PreferenceSnapshot> getSnapshot({String? userId}) async {
@@ -56,11 +56,41 @@ class HivePreference implements Preference {
     );
   }
 
+  @override
+  Future<Map<String, dynamic>> listPreferences({String? userId}) async {
+    if (userId == null) {
+      return const {};
+    }
+    final record = _box.get(userId);
+    return Map<String, dynamic>.from(
+      (record?['preferences'] as Map<String, dynamic>?) ?? const {},
+    );
+  }
+
+  @override
+  Future<void> deletePreferenceKey(String key, {String? userId}) async {
+    if (userId == null || key.trim().isEmpty) {
+      return;
+    }
+    final record = _box.get(userId);
+    if (record == null) {
+      return;
+    }
+    final preferences = Map<String, dynamic>.from(
+      (record['preferences'] as Map<String, dynamic>?) ?? const {},
+    );
+    if (!preferences.containsKey(key)) {
+      return;
+    }
+    preferences.remove(key);
+    record['preferences'] = preferences;
+    await _box.put(userId, record);
+  }
+
   Map<String, dynamic> _signalToMap(PreferenceSignal signal) {
     return {
       'userId': signal.userId,
       'text': signal.text,
-      'embedding': signal.embedding,
       'metadata': signal.metadata,
       'timestamp': signal.timestamp,
     };

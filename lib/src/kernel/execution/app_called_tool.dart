@@ -97,6 +97,7 @@ class AppCalledTool implements ot.Tool {
                 type: SchemaType.ARRAY,
                 items: Schema(
                   type: SchemaType.OBJECT,
+                  properties: const {},
                 ),
               ),
             ),

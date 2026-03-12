@@ -131,6 +131,7 @@ class OpenToolDirectory {
                         'name': param.name,
                         'required': param.required,
                         'description': param.description,
+                        'schema': param.schema.toJson(),
                       },
                     )
                     .toList(),

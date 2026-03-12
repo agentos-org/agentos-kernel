@@ -180,7 +180,7 @@ class LiteAgentPerception implements Perception {
               'name': 'params',
               'description': 'Intent parameters payload.',
               'required': false,
-              'schema': {'type': 'object'},
+              'schema': {'type': 'object', 'properties': {}},
             },
             {
               'name': 'confidence',

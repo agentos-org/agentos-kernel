@@ -83,11 +83,26 @@ INSERT INTO memory_records (
     );
   }
 
+  @override
+  Future<void> deleteRecord(String id) async {
+    await _ensureOpen();
+    final recordId = int.tryParse(id);
+    if (recordId == null) {
+      return;
+    }
+    await _executor.runCustom('DELETE FROM memory_records WHERE id = ?;', [
+      recordId,
+    ]);
+  }
+
+  @override
   Future<List<MemoryRecord>> listRecords({
     String? scope,
     String? userId,
+    String? type,
     DateTime? after,
     DateTime? before,
+    int offset = 0,
     int? limit,
     bool includeSummaries = false,
   }) async {
@@ -95,8 +110,10 @@ INSERT INTO memory_records (
     final rows = await _listDetailRows(
       scope: scope,
       userId: userId,
+      type: type,
       after: after,
       before: before,
+      offset: offset,
       limit: limit,
       includeSummaries: includeSummaries,
     );
@@ -171,6 +188,7 @@ ORDER BY scope ASC;
     final limitClause = (limit == null || limit <= 0) ? '' : 'LIMIT $limit';
     final rows = await _executor.runSelect('''
 SELECT
+  id,
   job_id,
   user_id,
   session_id,
@@ -191,6 +209,7 @@ $limitClause;
     if (scope == null || scope.isEmpty) {
       return _executor.runSelect('''
 SELECT
+  id,
   job_id,
   user_id,
   session_id,
@@ -205,6 +224,7 @@ ORDER BY timestamp ASC;
     return _executor.runSelect(
       '''
 SELECT
+  id,
   job_id,
   user_id,
   session_id,
@@ -223,8 +243,10 @@ ORDER BY timestamp ASC;
   Future<List<Map<String, Object?>>> _listDetailRows({
     String? scope,
     String? userId,
+    String? type,
     DateTime? after,
     DateTime? before,
+    int offset = 0,
     int? limit,
     bool includeSummaries = false,
   }) {
@@ -242,6 +264,10 @@ ORDER BY timestamp ASC;
       where.add('user_id = ?');
       args.add(userId);
     }
+    if (type != null && type.isNotEmpty) {
+      where.add('type = ?');
+      args.add(type);
+    }
     if (after != null) {
       where.add('timestamp > ?');
       args.add(after.millisecondsSinceEpoch);
@@ -252,8 +278,10 @@ ORDER BY timestamp ASC;
     }
     final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
     final limitClause = (limit == null || limit <= 0) ? '' : 'LIMIT $limit';
+    final offsetClause = offset <= 0 ? '' : 'OFFSET $offset';
     return _executor.runSelect('''
 SELECT
+  id,
   job_id,
   user_id,
   session_id,
@@ -264,7 +292,8 @@ SELECT
 FROM memory_records
 $whereClause
 ORDER BY timestamp ASC
-$limitClause;
+$limitClause
+$offsetClause;
 ''', args);
   }
 
@@ -281,6 +310,7 @@ $limitClause;
   MemoryRecord _recordFromRow(Map<String, Object?> row) {
     final timestamp = row['timestamp'] as int? ?? 0;
     return MemoryRecord(
+      id: (row['id'] as int?)?.toString(),
       jobId: row['job_id'] as String,
       userId: row['user_id'] as String?,
       sessionId: row['session_id'] as String?,
