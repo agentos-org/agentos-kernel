@@ -271,17 +271,8 @@ class LiteAgentPlanning extends Planning {
       );
     }
     buffer.writeln('Memory scope: ${memory.scope}');
-    buffer.writeln('Recent memory records:');
-    final records = _recentRecords(memory.records);
-    for (final record in records) {
-      buffer.writeln(
-        jsonEncode({
-          'type': record.type,
-          'data': record.data,
-          'timestamp': record.timestamp.toIso8601String(),
-        }),
-      );
-    }
+    buffer.writeln('Short-term memory: ${jsonEncode(memory.shortTermMemory)}');
+    buffer.writeln('Long-term memory: ${jsonEncode(memory.longTermMemory)}');
     buffer.writeln('Preferences: ${jsonEncode(preference.preferences)}');
     buffer.writeln('User id: ${preference.userId}');
     buffer.writeln('Available OpenTools:');
@@ -309,21 +300,6 @@ class LiteAgentPlanning extends Planning {
       );
     }
     return buffer.toString();
-  }
-
-  List<MemoryRecord> _recentRecords(List<MemoryRecord> records) {
-    final summaries = records
-        .where((record) => record.type == 'MEMORY_SUMMARY')
-        .toList();
-    final details = records
-        .where((record) => record.type != 'MEMORY_SUMMARY')
-        .toList();
-    final detailSlice = (memoryLimit <= 0 || details.length <= memoryLimit)
-        ? details
-        : details.sublist(details.length - memoryLimit);
-    final combined = [...summaries, ...detailSlice];
-    combined.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    return combined;
   }
 
   String _planningToolSpecJson() {

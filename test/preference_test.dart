@@ -1,12 +1,58 @@
 import 'dart:io';
 
 import 'package:agentos_kernel/src/kernel/preference/hive_preference.dart';
+import 'package:agentos_kernel/src/kernel/preference/aggregating_preference.dart';
+import 'package:agentos_kernel/src/kernel/preference/preference.dart';
 import 'package:agentos_kernel/src/kernel/preference/model.dart';
 import 'package:agentos_kernel/src/kernel/preference/vector_store.dart';
 import 'package:hive/hive.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('Preference storage', () {
+    test('lists signals and saves preferences separately', () async {
+      final preference = InMemoryPreference();
+
+      await preference.recordSignal(
+        PreferenceSignal(
+          userId: 'u1',
+          text: 'Prefer concise replies',
+          metadata: const {'preferenceKey': 'responseStyle'},
+        ),
+      );
+      await preference.savePreferences(const {
+        'responseStyle': 'concise',
+      }, userId: 'u1');
+
+      final signals = await preference.listSignals(userId: 'u1');
+      final preferences = await preference.listPreferences(userId: 'u1');
+
+      expect(signals, hasLength(1));
+      expect(signals.single.text, 'Prefer concise replies');
+      expect(preferences, {'responseStyle': 'concise'});
+    });
+
+    test(
+      'aggregating wrapper marks user dirty after recording signal',
+      () async {
+        final preference = InMemoryPreference();
+        String? dirtyUserId;
+        final aggregating = AggregatingPreference(
+          delegate: preference,
+          onSignalRecorded: (userId) {
+            dirtyUserId = userId;
+          },
+        );
+
+        await aggregating.recordSignal(
+          PreferenceSignal(userId: 'u1', text: 'Use Chinese by default'),
+        );
+
+        expect(dirtyUserId, 'u1');
+      },
+    );
+  });
+
   group('HivePreference.deletePreferenceKey', () {
     test('removes associated signals and vector segments', () async {
       final tempDir = await Directory.systemTemp.createTemp(

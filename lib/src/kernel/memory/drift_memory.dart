@@ -31,19 +31,28 @@ class DriftMemory implements Memory {
   @override
   Future<MemorySnapshot> getSnapshot({String? scope}) async {
     await _ensureOpen();
-    final summaries = await _listSummaries(scope: scope, limit: _summaryLimit);
-    if (summaries.isEmpty) {
-      final rows = await _listAllRows(scope: scope);
-      final records = rows.map(_recordFromRow).toList();
-      return MemorySnapshot(scope: scope, records: records);
-    }
-    final summaryEnd = _maxTimestamp(summaries);
-    final detailRows = await _listDetailRows(scope: scope, after: summaryEnd);
-    final detailRecords = detailRows.map(_recordFromRow).toList();
-    final combined = [...summaries, ...detailRecords];
-    combined.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    final records = combined;
-    return MemorySnapshot(scope: scope, records: records);
+    final shortTerm = await getLatestStateRecord(
+      type: shortTermMemoryType,
+      scope: scope,
+    );
+    final longTerm = await getLatestStateRecord(
+      type: longTermMemoryType,
+      scope: scope,
+    );
+    final summaries = await listSummaryRecords(
+      scope: scope,
+      limit: _summaryLimit,
+    );
+    return MemorySnapshot(
+      scope: scope,
+      data: {
+        'shortTermMemory': shortTerm?.data ?? const {},
+        'longTermMemory': longTerm?.data ?? const {},
+      },
+      shortTermMemory: shortTerm?.data,
+      longTermMemory: longTerm?.data,
+      records: summaries,
+    );
   }
 
   @override
@@ -126,7 +135,7 @@ INSERT INTO memory_records (
   }) async {
     await _ensureOpen();
     final where = <String>['type = ?'];
-    final args = <Object?>['MEMORY_SUMMARY'];
+    final args = <Object?>[memorySummaryType];
     if (scope != null && scope.isNotEmpty) {
       where.add('scope = ?');
       args.add(scope);
@@ -169,14 +178,16 @@ ORDER BY scope ASC;
     return rows.map(_recordFromRow).toList();
   }
 
-  Future<List<MemoryRecord>> _listSummaries({
+  Future<List<MemoryRecord>> listSummaryRecords({
     String? scope,
     String? userId,
     int? limit,
+    DateTime? after,
+    DateTime? before,
   }) async {
     await _ensureOpen();
     final where = <String>['type = ?'];
-    final args = <Object?>['MEMORY_SUMMARY'];
+    final args = <Object?>[memorySummaryType];
     if (scope != null && scope.isNotEmpty) {
       where.add('scope = ?');
       args.add(scope);
@@ -184,6 +195,14 @@ ORDER BY scope ASC;
     if (userId != null && userId.isNotEmpty) {
       where.add('user_id = ?');
       args.add(userId);
+    }
+    if (after != null) {
+      where.add('timestamp > ?');
+      args.add(after.millisecondsSinceEpoch);
+    }
+    if (before != null) {
+      where.add('timestamp <= ?');
+      args.add(before.millisecondsSinceEpoch);
     }
     final limitClause = (limit == null || limit <= 0) ? '' : 'LIMIT $limit';
     final rows = await _executor.runSelect('''
@@ -205,24 +224,23 @@ $limitClause;
     return summaries..sort((a, b) => a.timestamp.compareTo(b.timestamp));
   }
 
-  Future<List<Map<String, Object?>>> _listAllRows({String? scope}) {
-    if (scope == null || scope.isEmpty) {
-      return _executor.runSelect('''
-SELECT
-  id,
-  job_id,
-  user_id,
-  session_id,
-  scope,
-  type,
-  data_json,
-  timestamp
-FROM memory_records
-ORDER BY timestamp ASC;
-''', const []);
+  Future<MemoryRecord?> getLatestStateRecord({
+    required String type,
+    String? scope,
+    String? userId,
+  }) async {
+    await _ensureOpen();
+    final where = <String>['type = ?'];
+    final args = <Object?>[type];
+    if (scope != null && scope.isNotEmpty) {
+      where.add('scope = ?');
+      args.add(scope);
     }
-    return _executor.runSelect(
-      '''
+    if (userId != null && userId.isNotEmpty) {
+      where.add('user_id = ?');
+      args.add(userId);
+    }
+    final rows = await _executor.runSelect('''
 SELECT
   id,
   job_id,
@@ -233,11 +251,96 @@ SELECT
   data_json,
   timestamp
 FROM memory_records
-WHERE scope = ?
-ORDER BY timestamp ASC;
-''',
-      [scope],
-    );
+WHERE ${where.join(' AND ')}
+ORDER BY timestamp DESC
+LIMIT 1;
+''', args);
+    if (rows.isEmpty) {
+      return null;
+    }
+    return _recordFromRow(rows.first);
+  }
+
+  Future<void> deleteDetailRecordsBefore({
+    required DateTime before,
+    String? scope,
+    String? userId,
+  }) async {
+    await _ensureOpen();
+    final where = <String>['timestamp <= ?', 'type NOT IN (?, ?, ?)'];
+    final args = <Object?>[
+      before.millisecondsSinceEpoch,
+      memorySummaryType,
+      shortTermMemoryType,
+      longTermMemoryType,
+    ];
+    if (scope != null && scope.isNotEmpty) {
+      where.add('scope = ?');
+      args.add(scope);
+    }
+    if (userId != null && userId.isNotEmpty) {
+      where.add('user_id = ?');
+      args.add(userId);
+    }
+    await _executor.runCustom('''
+DELETE FROM memory_records
+WHERE ${where.join(' AND ')};
+''', args);
+  }
+
+  Future<void> deleteSummaryRecordsBefore({
+    required DateTime before,
+    String? scope,
+    String? userId,
+  }) async {
+    await _ensureOpen();
+    final where = <String>['timestamp <= ?', 'type = ?'];
+    final args = <Object?>[before.millisecondsSinceEpoch, memorySummaryType];
+    if (scope != null && scope.isNotEmpty) {
+      where.add('scope = ?');
+      args.add(scope);
+    }
+    if (userId != null && userId.isNotEmpty) {
+      where.add('user_id = ?');
+      args.add(userId);
+    }
+    await _executor.runCustom('''
+DELETE FROM memory_records
+WHERE ${where.join(' AND ')};
+''', args);
+  }
+
+  Future<void> pruneStateRecords({
+    required String type,
+    int keepLatest = 3,
+    String? scope,
+    String? userId,
+  }) async {
+    await _ensureOpen();
+    if (keepLatest < 0) {
+      keepLatest = 0;
+    }
+    final where = <String>['type = ?'];
+    final args = <Object?>[type];
+    if (scope != null && scope.isNotEmpty) {
+      where.add('scope = ?');
+      args.add(scope);
+    }
+    if (userId != null && userId.isNotEmpty) {
+      where.add('user_id = ?');
+      args.add(userId);
+    }
+    final offsetClause = 'LIMIT -1 OFFSET $keepLatest';
+    await _executor.runCustom('''
+DELETE FROM memory_records
+WHERE id IN (
+  SELECT id
+  FROM memory_records
+  WHERE ${where.join(' AND ')}
+  ORDER BY timestamp DESC
+  $offsetClause
+);
+''', args);
   }
 
   Future<List<Map<String, Object?>>> _listDetailRows({
@@ -253,8 +356,10 @@ ORDER BY timestamp ASC;
     final where = <String>[];
     final args = <Object?>[];
     if (!includeSummaries) {
-      where.add('type != ?');
-      args.add('MEMORY_SUMMARY');
+      where.add('type NOT IN (?, ?, ?)');
+      args.add(memorySummaryType);
+      args.add(shortTermMemoryType);
+      args.add(longTermMemoryType);
     }
     if (scope != null && scope.isNotEmpty) {
       where.add('scope = ?');
@@ -295,16 +400,6 @@ ORDER BY timestamp ASC
 $limitClause
 $offsetClause;
 ''', args);
-  }
-
-  DateTime _maxTimestamp(List<MemoryRecord> records) {
-    var maxTs = records.first.timestamp;
-    for (final record in records.skip(1)) {
-      if (record.timestamp.isAfter(maxTs)) {
-        maxTs = record.timestamp;
-      }
-    }
-    return maxTs;
   }
 
   MemoryRecord _recordFromRow(Map<String, Object?> row) {

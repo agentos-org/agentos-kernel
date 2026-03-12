@@ -58,6 +58,19 @@ class HivePreference implements Preference {
   }
 
   @override
+  Future<List<PreferenceSignal>> listSignals({String? userId}) async {
+    if (userId == null) {
+      return const [];
+    }
+    final record = _box.get(userId);
+    final signals = (record?['signals'] as List<dynamic>?) ?? const [];
+    return signals
+        .map(_signalFromStored)
+        .whereType<PreferenceSignal>()
+        .toList(growable: false);
+  }
+
+  @override
   Future<Map<String, dynamic>> listPreferences({String? userId}) async {
     if (userId == null) {
       return const {};
@@ -66,6 +79,20 @@ class HivePreference implements Preference {
     return Map<String, dynamic>.from(
       (record?['preferences'] as Map<String, dynamic>?) ?? const {},
     );
+  }
+
+  @override
+  Future<void> savePreferences(
+    Map<String, dynamic> preferences, {
+    String? userId,
+  }) async {
+    if (userId == null) {
+      return;
+    }
+    final record = _box.get(userId) ?? <String, dynamic>{};
+    record['preferences'] = Map<String, dynamic>.from(preferences);
+    record.putIfAbsent('signals', () => <dynamic>[]);
+    await _box.put(userId, record);
   }
 
   @override
@@ -175,5 +202,27 @@ class HivePreference implements Preference {
     if (indexId is String && indexId.trim().isNotEmpty) {
       await _vectorStore.delete(indexId);
     }
+  }
+
+  PreferenceSignal? _signalFromStored(Object? signal) {
+    if (signal is! Map) {
+      return null;
+    }
+    final userId = signal['userId'];
+    final text = signal['text'];
+    if (userId is! String || userId.trim().isEmpty) {
+      return null;
+    }
+    if (text is! String || text.trim().isEmpty) {
+      return null;
+    }
+    final metadata = signal['metadata'];
+    final timestamp = signal['timestamp'];
+    return PreferenceSignal(
+      userId: userId,
+      text: text,
+      metadata: metadata is Map<String, dynamic> ? metadata : null,
+      timestamp: timestamp is DateTime ? timestamp : null,
+    );
   }
 }

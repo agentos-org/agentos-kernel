@@ -35,7 +35,9 @@ import '../kernel/perception/liteagent_perception.dart';
 import '../kernel/perception/perception.dart';
 import '../kernel/perception/perception_agent_runner.dart';
 import '../kernel/planning/planning.dart';
+import '../kernel/preference/aggregating_preference.dart';
 import '../kernel/preference/hive_preference.dart';
+import '../kernel/preference/preference_aggregator.dart';
 import '../kernel/preference/preference.dart';
 import '../kernel/preference/lite_embeddings_vector_store.dart';
 import '../kernel/preference/vector_store.dart';
@@ -89,6 +91,10 @@ class KernelRuntimeConfig {
   final Duration learningInterval;
   final int learningMaxPerRun;
   final int learningQueueLimit;
+  final bool preferenceAggregationEnabled;
+  final Duration preferenceAggregationInterval;
+  final int preferenceAggregationMaxPerRun;
+  final int preferenceAggregationQueueLimit;
   final String opentoolDaemonHost;
   final int opentoolDaemonPort;
   final KernelMode mode;
@@ -117,6 +123,10 @@ class KernelRuntimeConfig {
     this.learningInterval = const Duration(minutes: 5),
     this.learningMaxPerRun = 1,
     this.learningQueueLimit = 500,
+    this.preferenceAggregationEnabled = true,
+    this.preferenceAggregationInterval = const Duration(minutes: 5),
+    this.preferenceAggregationMaxPerRun = 1,
+    this.preferenceAggregationQueueLimit = 500,
     this.opentoolDaemonHost = '127.0.0.1',
     this.opentoolDaemonPort = DAEMON_DEFAULT_PORT,
     this.mode = KernelMode.balanced,
@@ -206,6 +216,7 @@ class KernelService {
   final DriftMemory? _driftMemory;
   final SwitchableTextQueryVectorStore? _preferenceVectorStore;
   bool _memorySummarizerStarted;
+  bool _preferenceAggregatorStarted;
   final _JobSnapshotDispatcher _jobSnapshotDispatcher;
   AppCalledTool? _appCalledTool;
   final KernelRuntimeConfig _runtimeConfig;
@@ -234,6 +245,7 @@ class KernelService {
     DriftMemory? driftMemory,
     SwitchableTextQueryVectorStore? preferenceVectorStore,
     bool memorySummarizerStarted = false,
+    bool preferenceAggregatorStarted = false,
     KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
     String? opentoolDaemonHost,
     int? opentoolDaemonPort,
@@ -254,6 +266,7 @@ class KernelService {
       driftMemory: driftMemory,
       preferenceVectorStore: preferenceVectorStore,
       memorySummarizerStarted: memorySummarizerStarted,
+      preferenceAggregatorStarted: preferenceAggregatorStarted,
       runtimeConfig: runtimeConfig,
       opentoolDaemonHost: opentoolDaemonHost,
       opentoolDaemonPort: opentoolDaemonPort,
@@ -276,6 +289,7 @@ class KernelService {
     DriftMemory? driftMemory,
     SwitchableTextQueryVectorStore? preferenceVectorStore,
     bool memorySummarizerStarted = false,
+    bool preferenceAggregatorStarted = false,
     _JobSnapshotDispatcher? jobSnapshotDispatcher,
     KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
     String? opentoolDaemonHost,
@@ -294,6 +308,7 @@ class KernelService {
        _driftMemory = driftMemory,
        _preferenceVectorStore = preferenceVectorStore,
        _memorySummarizerStarted = memorySummarizerStarted,
+       _preferenceAggregatorStarted = preferenceAggregatorStarted,
        _jobSnapshotDispatcher =
            jobSnapshotDispatcher ?? _JobSnapshotDispatcher(),
        _runtimeConfig = runtimeConfig,
@@ -419,10 +434,11 @@ class KernelService {
     final openToolDirectory = OpenToolDirectory();
 
     final vectorStore = SwitchableTextQueryVectorStore(embeddingsVectorStore);
-    final preference = HivePreference(
+    final basePreference = HivePreference(
       box: preferenceBox,
       vectorStore: vectorStore,
     );
+    final preference = AggregatingPreference(delegate: basePreference);
 
     final perceptionDelegateSwitch = SwitchablePerception(ThrowingPerception());
     final perception = ContextualPerception(
@@ -510,6 +526,7 @@ class KernelService {
     );
 
     var memorySummarizerStarted = false;
+    var preferenceAggregatorStarted = false;
     if (config.runtime.memorySummaryEnabled &&
         llmConfig != null &&
         llmConfigPool != null) {
@@ -536,6 +553,31 @@ class KernelService {
       );
       memorySummarizerStarted = true;
     }
+    if (config.runtime.preferenceAggregationEnabled &&
+        llmConfig != null &&
+        llmConfigPool != null) {
+      final aggregator = PreferenceAggregator(
+        preference: basePreference,
+        llmQueue: llmQueue,
+        client: liteAgentClient,
+        llmConfig: llmConfig,
+        llmConfigResolver: _makeResolver(
+          pool: llmConfigPool,
+          purpose: 'preference_aggregation',
+          mode: () => config.runtime.mode,
+          profiler: modelProfiler,
+          supervision: supervision,
+          runtimeConfig: config.runtime,
+        ),
+        logger: logger,
+        interval: config.runtime.preferenceAggregationInterval,
+        maxPerRun: config.runtime.preferenceAggregationMaxPerRun,
+        queueLimit: config.runtime.preferenceAggregationQueueLimit,
+        enabled: true,
+      );
+      preference.onSignalRecorded = aggregator.markDirty;
+      preferenceAggregatorStarted = true;
+    }
     return KernelService._internal(
       kernel,
       llmConfigPool: llmConfigPool,
@@ -549,6 +591,7 @@ class KernelService {
       driftMemory: longTermMemory,
       preferenceVectorStore: vectorStore,
       memorySummarizerStarted: memorySummarizerStarted,
+      preferenceAggregatorStarted: preferenceAggregatorStarted,
       jobSnapshotDispatcher: jobSnapshotDispatcher,
       runtimeConfig: config.runtime,
       opentoolDaemonHost: config.runtime.opentoolDaemonHost,
@@ -801,6 +844,36 @@ class KernelService {
         enabled: true,
       );
       _memorySummarizerStarted = true;
+    }
+    if (_runtimeConfig.preferenceAggregationEnabled &&
+        !_preferenceAggregatorStarted) {
+      final preference = _kernel.preference;
+      if (preference is! AggregatingPreference) {
+        throw StateError(
+          'Preference aggregation requires AggregatingPreference wrapper.',
+        );
+      }
+      final aggregator = PreferenceAggregator(
+        preference: preference.delegate,
+        llmQueue: llmQueue,
+        client: liteAgentClient,
+        llmConfig: llmConfig,
+        llmConfigResolver: _makeResolver(
+          pool: pool,
+          purpose: 'preference_aggregation',
+          mode: () => _mode,
+          profiler: profiler,
+          supervision: supervision,
+          runtimeConfig: _runtimeConfig,
+        ),
+        logger: _logger,
+        interval: _runtimeConfig.preferenceAggregationInterval,
+        maxPerRun: _runtimeConfig.preferenceAggregationMaxPerRun,
+        queueLimit: _runtimeConfig.preferenceAggregationQueueLimit,
+        enabled: true,
+      );
+      preference.onSignalRecorded = aggregator.markDirty;
+      _preferenceAggregatorStarted = true;
     }
   }
 
@@ -1064,11 +1137,12 @@ class KernelService {
     int limit = 20,
   }) async {
     final snapshot = await _kernel.memory.getSnapshot(scope: scope);
-    final records = _recentMemory(snapshot.records, limit);
     return MemorySnapshot(
       scope: snapshot.scope,
       data: snapshot.data,
-      records: records,
+      shortTermMemory: snapshot.shortTermMemory,
+      longTermMemory: snapshot.longTermMemory,
+      records: snapshot.records,
     );
   }
 
@@ -1157,19 +1231,11 @@ class KernelService {
     final toolSummaries = directory.isEmpty
         ? const []
         : await directory.summaries();
-    final recentRecords = _recentMemory(memorySnapshot.records, memoryLimit);
     final data = <String, dynamic>{
       'mode': 'suggestion',
       'memoryScope': memorySnapshot.scope,
-      'recentMemory': recentRecords
-          .map(
-            (record) => {
-              'type': record.type,
-              'data': record.data,
-              'timestamp': record.timestamp.toIso8601String(),
-            },
-          )
-          .toList(),
+      'shortTermMemory': memorySnapshot.shortTermMemory,
+      'longTermMemory': memorySnapshot.longTermMemory,
       'preferences': preferenceSnapshot.preferences,
       'availableTools': toolSummaries,
       if (allowedActions != null && allowedActions.isNotEmpty)
@@ -1566,25 +1632,6 @@ class KernelService {
       throw StateError('OpenToolDirectory not configured on kernel.');
     }
     return directory;
-  }
-
-  List<MemoryRecord> _recentMemory(List<MemoryRecord> records, int limit) {
-    final summaries = records
-        .where((record) => record.type == 'MEMORY_SUMMARY')
-        .toList();
-    final details = records
-        .where((record) => record.type != 'MEMORY_SUMMARY')
-        .toList();
-    final detailSlice = (limit <= 0 || details.length <= limit)
-        ? details
-        : details.sublist(details.length - limit);
-    final summaryLimit = _runtimeConfig.memorySummaryLimit;
-    final summarySlice = (summaryLimit <= 0 || summaries.length <= summaryLimit)
-        ? summaries
-        : summaries.sublist(summaries.length - summaryLimit);
-    final combined = [...summarySlice, ...detailSlice];
-    combined.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    return combined;
   }
 
   String _memorySummaryText(MemoryRecord record) {

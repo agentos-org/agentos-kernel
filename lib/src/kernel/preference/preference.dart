@@ -3,7 +3,12 @@ import 'model.dart';
 abstract class Preference {
   Future<PreferenceSnapshot> getSnapshot({String? userId});
   Future<void> recordSignal(PreferenceSignal signal);
+  Future<List<PreferenceSignal>> listSignals({String? userId});
   Future<Map<String, dynamic>> listPreferences({String? userId});
+  Future<void> savePreferences(
+    Map<String, dynamic> preferences, {
+    String? userId,
+  });
   Future<void> deletePreferenceKey(String key, {String? userId});
 }
 
@@ -27,11 +32,26 @@ class InMemoryPreference extends Preference {
     final signals =
         (prefs['signals'] as List<dynamic>?)?.toList() ?? <dynamic>[];
     signals.add({
+      'userId': signal.userId,
       'text': signal.text,
       'metadata': signal.metadata,
       'timestamp': signal.timestamp,
     });
     prefs['signals'] = signals;
+    prefs.putIfAbsent('preferences', () => <String, dynamic>{});
+  }
+
+  @override
+  Future<List<PreferenceSignal>> listSignals({String? userId}) async {
+    if (userId == null) {
+      return const [];
+    }
+    final prefs = _preferences[userId];
+    final signals = (prefs?['signals'] as List<dynamic>?) ?? const [];
+    return signals
+        .map(_signalFromStored)
+        .whereType<PreferenceSignal>()
+        .toList(growable: false);
   }
 
   @override
@@ -39,7 +59,22 @@ class InMemoryPreference extends Preference {
     if (userId == null) {
       return const {};
     }
-    return Map<String, dynamic>.from(_preferences[userId] ?? const {});
+    final prefs = _preferences[userId];
+    return Map<String, dynamic>.from(
+      (prefs?['preferences'] as Map<String, dynamic>?) ?? const {},
+    );
+  }
+
+  @override
+  Future<void> savePreferences(
+    Map<String, dynamic> preferences, {
+    String? userId,
+  }) async {
+    if (userId == null) {
+      return;
+    }
+    final prefs = _preferences.putIfAbsent(userId, () => <String, dynamic>{});
+    prefs['preferences'] = Map<String, dynamic>.from(preferences);
   }
 
   @override
@@ -48,7 +83,13 @@ class InMemoryPreference extends Preference {
       return;
     }
     final prefs = _preferences[userId];
-    prefs?.remove(key);
+    final storedPreferences = Map<String, dynamic>.from(
+      (prefs?['preferences'] as Map<String, dynamic>?) ?? const {},
+    );
+    storedPreferences.remove(key);
+    if (prefs != null) {
+      prefs['preferences'] = storedPreferences;
+    }
     final signals = (prefs?['signals'] as List<dynamic>?)?.toList();
     if (signals == null) {
       return;
@@ -111,5 +152,27 @@ class InMemoryPreference extends Preference {
       return null;
     }
     return nextMetadata;
+  }
+
+  PreferenceSignal? _signalFromStored(Object? signal) {
+    if (signal is! Map) {
+      return null;
+    }
+    final userId = signal['userId'];
+    final text = signal['text'];
+    if (userId is! String || userId.trim().isEmpty) {
+      return null;
+    }
+    if (text is! String || text.trim().isEmpty) {
+      return null;
+    }
+    final metadata = signal['metadata'];
+    final timestamp = signal['timestamp'];
+    return PreferenceSignal(
+      userId: userId,
+      text: text,
+      metadata: metadata is Map<String, dynamic> ? metadata : null,
+      timestamp: timestamp is DateTime ? timestamp : null,
+    );
   }
 }

@@ -23,6 +23,7 @@ class MemorySummarizer {
   final int maxRecords;
   final int minRecords;
   final int maxScopesPerRun;
+  final int keepLatestStateRecords;
   final bool enabled;
 
   Timer? _timer;
@@ -41,6 +42,7 @@ class MemorySummarizer {
     this.maxRecords = 200,
     this.minRecords = 20,
     this.maxScopesPerRun = 1,
+    this.keepLatestStateRecords = 3,
     this.enabled = true,
   }) {
     if (enabled) {
@@ -103,58 +105,174 @@ class MemorySummarizer {
       limit: maxRecords,
       includeSummaries: false,
     );
-    if (records.length < minRecords) {
-      return null;
+    MemoryRecord? summaryRecord;
+    if (records.length >= minRecords) {
+      final prompt = _buildSummaryPrompt(
+        records: records,
+        scope: scope,
+        userId: userId,
+      );
+      final response = await _runLlm(
+        purpose: 'memory_summary',
+        priority: 2,
+        userId: userId,
+        prompt: prompt,
+        systemPrompt: _memorySummarySystemPrompt,
+      );
+      final summaryPayload = _parseSummaryPayload(response.text);
+      final summaryText = _extractSummaryText(summaryPayload) ?? response.text;
+      final summaryStart = records.first.timestamp;
+      final summaryEnd = records.last.timestamp;
+      summaryRecord = MemoryRecord(
+        jobId: 'summary-${DateTime.now().microsecondsSinceEpoch}',
+        userId: userId,
+        sessionId: null,
+        scope: scope,
+        type: memorySummaryType,
+        data: {
+          'summaryText': summaryText,
+          'summaryJson': summaryPayload,
+          'summaryStart': summaryStart.toIso8601String(),
+          'summaryEnd': summaryEnd.toIso8601String(),
+          'recordCount': records.length,
+        },
+        timestamp: summaryEnd,
+      );
+      await memory.record(summaryRecord);
     }
-    final prompt = _buildSummaryPrompt(
-      records: records,
-      scope: scope,
-      userId: userId,
-    );
-    final effectiveConfig = normalizeLlmConfigForLiteAgent(
-      llmConfigResolver?.call() ?? llmConfig,
-    );
-    final modelKey = buildLlmModelKey(
-      baseUrl: effectiveConfig.baseUrl,
-      model: effectiveConfig.model,
-      apiKey: effectiveConfig.apiKey,
-    );
-    final response = await llmQueue.enqueue(
-      purpose: 'memory_summary',
-      priority: 2,
-      weight: 2,
-      modelKey: modelKey,
-      userId: userId,
-      run: (context) async {
-        return client.chatSimple(
-          llmConfig: effectiveConfig,
-          systemPrompt: _memorySummarySystemPrompt,
-          userPrompt: prompt,
-          context: context,
-        );
-      },
-    );
-    final summaryPayload = _parseSummaryPayload(response.text);
-    final summaryText = _extractSummaryText(summaryPayload) ?? response.text;
-    final summaryStart = records.first.timestamp;
-    final summaryEnd = records.last.timestamp;
-    final summaryRecord = MemoryRecord(
-      jobId: 'summary-${DateTime.now().microsecondsSinceEpoch}',
-      userId: userId,
-      sessionId: null,
-      scope: scope,
-      type: 'MEMORY_SUMMARY',
-      data: {
-        'summaryText': summaryText,
-        'summaryJson': summaryPayload,
-        'summaryStart': summaryStart.toIso8601String(),
-        'summaryEnd': summaryEnd.toIso8601String(),
-        'recordCount': records.length,
-      },
-      timestamp: summaryEnd,
-    );
-    await memory.record(summaryRecord);
+    await _refreshMemoryStates(scope: scope, userId: userId, cutoff: cutoff);
+    await _compactMemory(scope: scope, userId: userId);
     return summaryRecord;
+  }
+
+  Future<void> _refreshMemoryStates({
+    required String scope,
+    String? userId,
+    required DateTime cutoff,
+  }) async {
+    await _refreshShortTermMemory(scope: scope, userId: userId, cutoff: cutoff);
+    if (!llmQueue.isIdle) {
+      return;
+    }
+    await _refreshLongTermMemory(scope: scope, userId: userId, cutoff: cutoff);
+  }
+
+  Future<void> _refreshShortTermMemory({
+    required String scope,
+    String? userId,
+    required DateTime cutoff,
+  }) async {
+    final recentSummaries = await memory.listSummaryRecords(
+      scope: scope,
+      userId: userId,
+      after: cutoff,
+    );
+    if (recentSummaries.isEmpty) {
+      await memory.record(
+        MemoryRecord(
+          jobId: 'short-memory-${DateTime.now().microsecondsSinceEpoch}',
+          userId: userId,
+          sessionId: null,
+          scope: scope,
+          type: shortTermMemoryType,
+          data: const {'summaryText': '', 'summaryJson': {}, 'sourceCount': 0},
+          timestamp: DateTime.now(),
+        ),
+      );
+      return;
+    }
+    final prompt = _buildSummaryAggregationPrompt(
+      label: 'recent summaries',
+      summaries: recentSummaries,
+      scope: scope,
+      userId: userId,
+      priorMemory: null,
+    );
+    final response = await _runLlm(
+      purpose: 'short_term_memory',
+      priority: 3,
+      userId: userId,
+      prompt: prompt,
+      systemPrompt: _memoryStateSystemPrompt,
+    );
+    final payload = _parseSummaryPayload(response.text);
+    final summaryText = _extractSummaryText(payload) ?? response.text;
+    await memory.record(
+      MemoryRecord(
+        jobId: 'short-memory-${DateTime.now().microsecondsSinceEpoch}',
+        userId: userId,
+        sessionId: null,
+        scope: scope,
+        type: shortTermMemoryType,
+        data: {
+          'summaryText': summaryText,
+          'summaryJson': payload,
+          'sourceCount': recentSummaries.length,
+          'sourceStart': recentSummaries.first.timestamp.toIso8601String(),
+          'sourceEnd': recentSummaries.last.timestamp.toIso8601String(),
+        },
+        timestamp: recentSummaries.last.timestamp,
+      ),
+    );
+  }
+
+  Future<void> _refreshLongTermMemory({
+    required String scope,
+    String? userId,
+    required DateTime cutoff,
+  }) async {
+    final previous = await memory.getLatestStateRecord(
+      type: longTermMemoryType,
+      scope: scope,
+      userId: userId,
+    );
+    final previousEnd = _sourceEnd(previous?.data);
+    final promotedSummaries = await memory.listSummaryRecords(
+      scope: scope,
+      userId: userId,
+      after: previousEnd,
+      before: cutoff,
+    );
+    if (promotedSummaries.isEmpty && previous != null) {
+      return;
+    }
+    if (promotedSummaries.isEmpty) {
+      return;
+    }
+    final prompt = _buildSummaryAggregationPrompt(
+      label: 'older summaries',
+      summaries: promotedSummaries,
+      scope: scope,
+      userId: userId,
+      priorMemory: previous?.data,
+    );
+    final response = await _runLlm(
+      purpose: 'long_term_memory',
+      priority: 4,
+      userId: userId,
+      prompt: prompt,
+      systemPrompt: _longTermMemorySystemPrompt,
+    );
+    final payload = _parseSummaryPayload(response.text);
+    final summaryText = _extractSummaryText(payload) ?? response.text;
+    await memory.record(
+      MemoryRecord(
+        jobId: 'long-memory-${DateTime.now().microsecondsSinceEpoch}',
+        userId: userId,
+        sessionId: null,
+        scope: scope,
+        type: longTermMemoryType,
+        data: {
+          'summaryText': summaryText,
+          'summaryJson': payload,
+          'sourceCount': promotedSummaries.length,
+          'sourceStart': promotedSummaries.first.timestamp.toIso8601String(),
+          'sourceEnd': promotedSummaries.last.timestamp.toIso8601String(),
+          if (previous?.data != null) 'previousLongTermMemory': previous!.data,
+        },
+        timestamp: promotedSummaries.last.timestamp,
+      ),
+    );
   }
 
   String _buildSummaryPrompt({
@@ -175,6 +293,34 @@ class MemorySummarizer {
           'type': record.type,
           'data': record.data,
           'timestamp': record.timestamp.toIso8601String(),
+        }),
+      );
+    }
+    return buffer.toString();
+  }
+
+  String _buildSummaryAggregationPrompt({
+    required String label,
+    required List<MemoryRecord> summaries,
+    required String scope,
+    String? userId,
+    Map<String, dynamic>? priorMemory,
+  }) {
+    final buffer = StringBuffer();
+    buffer.writeln('Scope: $scope');
+    if (userId != null && userId.isNotEmpty) {
+      buffer.writeln('User: $userId');
+    }
+    if (priorMemory != null && priorMemory.isNotEmpty) {
+      buffer.writeln('Previous memory: ${jsonEncode(priorMemory)}');
+    }
+    buffer.writeln('Aggregate these $label into a compact memory state.');
+    buffer.writeln('Summaries (JSON lines):');
+    for (final summary in summaries) {
+      buffer.writeln(
+        jsonEncode({
+          'timestamp': summary.timestamp.toIso8601String(),
+          'data': summary.data,
         }),
       );
     }
@@ -218,8 +364,96 @@ class MemorySummarizer {
     return null;
   }
 
+  Future<LiteAgentResponse> _runLlm({
+    required String purpose,
+    required int priority,
+    required String? userId,
+    required String prompt,
+    required String systemPrompt,
+  }) async {
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(
+      llmConfigResolver?.call() ?? llmConfig,
+    );
+    final modelKey = buildLlmModelKey(
+      baseUrl: effectiveConfig.baseUrl,
+      model: effectiveConfig.model,
+      apiKey: effectiveConfig.apiKey,
+    );
+    return llmQueue.enqueue(
+      purpose: purpose,
+      priority: priority,
+      weight: 2,
+      modelKey: modelKey,
+      userId: userId,
+      run: (context) async {
+        return client.chatSimple(
+          llmConfig: effectiveConfig,
+          systemPrompt: systemPrompt,
+          userPrompt: prompt,
+          context: context,
+        );
+      },
+    );
+  }
+
+  DateTime? _sourceEnd(Map<String, dynamic>? data) {
+    final value = data?['sourceEnd'];
+    if (value is String) {
+      return DateTime.tryParse(value);
+    }
+    return null;
+  }
+
+  Future<void> _compactMemory({required String scope, String? userId}) async {
+    final latestSummaryTs = await memory.getLatestSummaryTimestamp(
+      scope: scope,
+      userId: userId,
+    );
+    if (latestSummaryTs != null) {
+      await memory.deleteDetailRecordsBefore(
+        before: latestSummaryTs,
+        scope: scope,
+        userId: userId,
+      );
+    }
+
+    final latestLongTerm = await memory.getLatestStateRecord(
+      type: longTermMemoryType,
+      scope: scope,
+      userId: userId,
+    );
+    final coveredSummaryEnd = _sourceEnd(latestLongTerm?.data);
+    if (coveredSummaryEnd != null) {
+      await memory.deleteSummaryRecordsBefore(
+        before: coveredSummaryEnd,
+        scope: scope,
+        userId: userId,
+      );
+    }
+
+    await memory.pruneStateRecords(
+      type: shortTermMemoryType,
+      keepLatest: keepLatestStateRecords,
+      scope: scope,
+      userId: userId,
+    );
+    await memory.pruneStateRecords(
+      type: longTermMemoryType,
+      keepLatest: keepLatestStateRecords,
+      scope: scope,
+      userId: userId,
+    );
+  }
+
   static const String _memorySummarySystemPrompt =
       'You summarize memory records for future planning and preference learning. '
       'Return JSON only with fields: summaryText, keyFacts, preferences, openQuestions, '
       'intents, toolsUsed, timeRangeStart, timeRangeEnd, recordCount.';
+  static const String _memoryStateSystemPrompt =
+      'You aggregate recent memory summaries into a short-term memory state. '
+      'Return JSON only with fields: summaryText, keyFacts, activeGoals, openThreads, preferences, recencyNotes.';
+  static const String _longTermMemorySystemPrompt =
+      'You update long-term memory from prior long-term memory and older summaries. '
+      'Gradually forget stale details and keep only durable patterns. '
+      'Return JSON only with fields: summaryText, keyFacts, enduringPreferences, recurringPatterns, durableContext.';
 }

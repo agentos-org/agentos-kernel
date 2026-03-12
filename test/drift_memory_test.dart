@@ -124,6 +124,203 @@ WHERE type IN ('table', 'index');
         'summary-3',
       ]);
     });
+
+    test(
+      'returns structured short-term and long-term memory snapshot',
+      () async {
+        final dbPath = await _newDbPath();
+        final memory = DriftMemory.open(path: dbPath);
+        await memory.record(
+          MemoryRecord(
+            jobId: 'job-short',
+            scope: 'scope-a',
+            type: shortTermMemoryType,
+            data: const {'summaryText': 'recent summary'},
+            timestamp: DateTime.now(),
+          ),
+        );
+        await memory.record(
+          MemoryRecord(
+            jobId: 'job-long',
+            scope: 'scope-a',
+            type: longTermMemoryType,
+            data: const {'summaryText': 'durable summary'},
+            timestamp: DateTime.now().add(const Duration(seconds: 1)),
+          ),
+        );
+
+        final snapshot = await memory.getSnapshot(scope: 'scope-a');
+
+        expect(snapshot.shortTermMemory['summaryText'], 'recent summary');
+        expect(snapshot.longTermMemory['summaryText'], 'durable summary');
+        expect(
+          snapshot.data,
+          containsPair(
+            'shortTermMemory',
+            containsPair('summaryText', 'recent summary'),
+          ),
+        );
+      },
+    );
+
+    test('listRecords excludes memory state records by default', () async {
+      final dbPath = await _newDbPath();
+      final memory = DriftMemory.open(path: dbPath);
+      await memory.record(
+        MemoryRecord(
+          jobId: 'job-short',
+          scope: 'scope-a',
+          type: shortTermMemoryType,
+          data: const {'summaryText': 'recent summary'},
+          timestamp: DateTime.now(),
+        ),
+      );
+      await memory.record(
+        MemoryRecord(
+          jobId: 'job-detail',
+          scope: 'scope-a',
+          type: 'TEST',
+          data: const {'text': 'detail'},
+          timestamp: DateTime.now().add(const Duration(seconds: 1)),
+        ),
+      );
+
+      final records = await memory.listRecords(scope: 'scope-a');
+
+      expect(records, hasLength(1));
+      expect(records.single.type, 'TEST');
+    });
+
+    test(
+      'deleteDetailRecordsBefore removes only covered raw records',
+      () async {
+        final dbPath = await _newDbPath();
+        final memory = DriftMemory.open(path: dbPath);
+        final base = DateTime.now();
+        await memory.record(
+          MemoryRecord(
+            jobId: 'job-detail-old',
+            scope: 'scope-a',
+            type: 'TEST',
+            data: const {'text': 'old'},
+            timestamp: base,
+          ),
+        );
+        await memory.record(
+          MemoryRecord(
+            jobId: 'job-summary',
+            scope: 'scope-a',
+            type: memorySummaryType,
+            data: const {'summaryText': 'covered'},
+            timestamp: base.add(const Duration(seconds: 1)),
+          ),
+        );
+        await memory.record(
+          MemoryRecord(
+            jobId: 'job-short',
+            scope: 'scope-a',
+            type: shortTermMemoryType,
+            data: const {'summaryText': 'short'},
+            timestamp: base.add(const Duration(seconds: 2)),
+          ),
+        );
+        await memory.record(
+          MemoryRecord(
+            jobId: 'job-detail-new',
+            scope: 'scope-a',
+            type: 'TEST',
+            data: const {'text': 'new'},
+            timestamp: base.add(const Duration(seconds: 3)),
+          ),
+        );
+
+        await memory.deleteDetailRecordsBefore(
+          before: base.add(const Duration(seconds: 1)),
+          scope: 'scope-a',
+        );
+
+        final records = await memory.listRecords(
+          scope: 'scope-a',
+          includeSummaries: true,
+        );
+        expect(records.map((record) => record.jobId), [
+          'job-summary',
+          'job-short',
+          'job-detail-new',
+        ]);
+      },
+    );
+
+    test(
+      'deleteSummaryRecordsBefore removes absorbed summaries only',
+      () async {
+        final dbPath = await _newDbPath();
+        final memory = DriftMemory.open(path: dbPath);
+        final base = DateTime.now();
+        await memory.record(
+          MemoryRecord(
+            jobId: 'job-summary-1',
+            scope: 'scope-a',
+            type: memorySummaryType,
+            data: const {'summaryText': 'summary-1'},
+            timestamp: base,
+          ),
+        );
+        await memory.record(
+          MemoryRecord(
+            jobId: 'job-summary-2',
+            scope: 'scope-a',
+            type: memorySummaryType,
+            data: const {'summaryText': 'summary-2'},
+            timestamp: base.add(const Duration(seconds: 1)),
+          ),
+        );
+
+        await memory.deleteSummaryRecordsBefore(before: base, scope: 'scope-a');
+
+        final records = await memory.listRecords(
+          scope: 'scope-a',
+          type: memorySummaryType,
+          includeSummaries: true,
+        );
+        expect(records, hasLength(1));
+        expect(records.single.jobId, 'job-summary-2');
+      },
+    );
+
+    test('pruneStateRecords keeps only latest state versions', () async {
+      final dbPath = await _newDbPath();
+      final memory = DriftMemory.open(path: dbPath);
+      final base = DateTime.now();
+      for (var i = 0; i < 5; i++) {
+        await memory.record(
+          MemoryRecord(
+            jobId: 'job-short-$i',
+            scope: 'scope-a',
+            type: shortTermMemoryType,
+            data: {'summaryText': 'short-$i'},
+            timestamp: base.add(Duration(seconds: i)),
+          ),
+        );
+      }
+
+      await memory.pruneStateRecords(
+        type: shortTermMemoryType,
+        keepLatest: 2,
+        scope: 'scope-a',
+      );
+
+      final records = await memory.listRecords(
+        scope: 'scope-a',
+        type: shortTermMemoryType,
+        includeSummaries: true,
+      );
+      expect(records, hasLength(2));
+      expect(records.map((record) => record.jobId), [
+        'job-short-3',
+        'job-short-4',
+      ]);
+    });
   });
 }
 

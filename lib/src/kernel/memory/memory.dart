@@ -25,7 +25,18 @@ class InMemoryMemory extends Memory {
     final records = scope == null
         ? List<MemoryRecord>.from(_records)
         : _records.where((record) => record.scope == scope).toList();
-    return MemorySnapshot(scope: scope, records: records);
+    final shortTerm = _latestDataRecord(records, shortTermMemoryType);
+    final longTerm = _latestDataRecord(records, longTermMemoryType);
+    return MemorySnapshot(
+      scope: scope,
+      data: {
+        'shortTermMemory': shortTerm?.data ?? const {},
+        'longTermMemory': longTerm?.data ?? const {},
+      },
+      shortTermMemory: shortTerm?.data,
+      longTermMemory: longTerm?.data,
+      records: records,
+    );
   }
 
   @override
@@ -57,7 +68,10 @@ class InMemoryMemory extends Memory {
   }) async {
     var records = _records
         .where((record) {
-          if (!includeSummaries && record.type == 'MEMORY_SUMMARY') {
+          if (!includeSummaries &&
+              (record.type == memorySummaryType ||
+                  record.type == shortTermMemoryType ||
+                  record.type == longTermMemoryType)) {
             return false;
           }
           if (scope != null && scope.isNotEmpty && record.scope != scope) {
@@ -94,5 +108,18 @@ class InMemoryMemory extends Memory {
   @override
   Future<void> deleteRecord(String id) async {
     _records.removeWhere((record) => record.id == id);
+  }
+
+  MemoryRecord? _latestDataRecord(List<MemoryRecord> records, String type) {
+    MemoryRecord? latest;
+    for (final record in records) {
+      if (record.type != type) {
+        continue;
+      }
+      if (latest == null || record.timestamp.isAfter(latest.timestamp)) {
+        latest = record;
+      }
+    }
+    return latest;
   }
 }
