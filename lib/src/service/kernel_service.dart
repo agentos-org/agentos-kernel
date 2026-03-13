@@ -18,6 +18,7 @@ import '../kernel/kernel.dart';
 import '../kernel/learning/deferred_learning.dart';
 import '../kernel/learning/liteagent_learning.dart';
 import '../kernel/learning/learning.dart';
+import '../kernel/learning/model.dart';
 import '../kernel/agent/liteagent_client.dart';
 import '../kernel/agent/llm_metrics.dart';
 import '../kernel/agent/llm_queue.dart';
@@ -638,28 +639,44 @@ class KernelService {
     return LlmMetrics(requestId, sink);
   }
 
+  @Deprecated(
+    'recordAgentMessage is deprecated and will be removed in a future release. '
+    'Use ingestAgentMessageForLearning() so agent messages also feed '
+    'preference learning.',
+  )
   Future<void> recordAgentMessage({
     required String userId,
     required String bundleId,
     required AgentMessage agentMessage,
   }) async {
-    final scope = 'bundle:$bundleId';
-    final record = MemoryRecord(
-      jobId: 'external-${DateTime.now().microsecondsSinceEpoch}',
+    final record = _buildExternalAgentMessageRecord(
       userId: userId,
-      sessionId: agentMessage.sessionId,
-      scope: scope,
-      type: 'EXTERNAL_AGENT_MESSAGE',
-      data: {
-        'bundleId': bundleId,
-        'userId': userId,
-        'liteAgentSessionId': agentMessage.sessionId,
-        'taskId': agentMessage.taskId,
-        'agentMessage': _sanitizeJsonValue(agentMessage.toJson()),
-      },
-      timestamp: agentMessage.createTime,
+      bundleId: bundleId,
+      agentMessage: agentMessage,
     );
     await _kernel.memory.record(record);
+  }
+
+  Future<void> ingestAgentMessageForLearning({
+    required String userId,
+    required String bundleId,
+    required AgentMessage agentMessage,
+  }) async {
+    final record = _buildExternalAgentMessageRecord(
+      userId: userId,
+      bundleId: bundleId,
+      agentMessage: agentMessage,
+    );
+    await _kernel.memory.record(record);
+    await _kernel.learning.consume(
+      LearningRecord(
+        jobId: record.jobId,
+        userId: userId,
+        type: record.type,
+        data: record.data,
+        timestamp: record.timestamp,
+      ),
+    );
   }
 
   Future<void> setPresetOpenSpecList(
@@ -1217,6 +1234,10 @@ class KernelService {
   /// [source] identifies the caller or channel.
   /// [allowedActions] limits which actions can be suggested.
   /// [memoryLimit] controls how many recent memory records are exposed.
+  @Deprecated(
+    'suggestNextAction is deprecated and will be removed in a future release. '
+    'Prefer direct execution-oriented APIs.',
+  )
   Future<IntentResponseDto> suggestNextAction({
     required String source,
     List<String>? allowedActions,
@@ -1266,6 +1287,10 @@ class KernelService {
   /// [data] carries additional structured payload.
   ///
   /// Returns a [JobHandle] for status tracking or confirmation.
+  @Deprecated(
+    'submitRaw is deprecated and will be removed in a future release. '
+    'Prefer direct execution-oriented APIs.',
+  )
   JobHandle submitRaw({
     required String source,
     required List<Content> content,
@@ -1299,6 +1324,10 @@ class KernelService {
   ///
   /// [source] identifies the caller or channel (e.g., KernelSources.api).
   /// [intent] is the chosen intent candidate.
+  @Deprecated(
+    'submitIntent is deprecated and will be removed in a future release. '
+    'Prefer direct execution-oriented APIs.',
+  )
   JobHandle submitIntent({
     required String source,
     required IntentCandidateDto intent,
@@ -1322,6 +1351,10 @@ class KernelService {
   ///
   /// [jobId] is the job awaiting confirmation.
   /// [confirmed] true to proceed, false to cancel.
+  @Deprecated(
+    'confirmJob is deprecated and will be removed in a future release. '
+    'Prefer direct execution-oriented APIs.',
+  )
   JobHandle confirmJob(String jobId, {required bool confirmed}) {
     return _kernel.confirmJob(jobId, confirmed: confirmed);
   }
@@ -1603,6 +1636,29 @@ class KernelService {
       return null;
     }
     return content.map((item) => item.message).join('\n');
+  }
+
+  MemoryRecord _buildExternalAgentMessageRecord({
+    required String userId,
+    required String bundleId,
+    required AgentMessage agentMessage,
+  }) {
+    final scope = 'bundle:$bundleId';
+    return MemoryRecord(
+      jobId: 'external-${DateTime.now().microsecondsSinceEpoch}',
+      userId: userId,
+      sessionId: agentMessage.sessionId,
+      scope: scope,
+      type: 'EXTERNAL_AGENT_MESSAGE',
+      data: {
+        'bundleId': bundleId,
+        'userId': userId,
+        'liteAgentSessionId': agentMessage.sessionId,
+        'taskId': agentMessage.taskId,
+        'agentMessage': _sanitizeJsonValue(agentMessage.toJson()),
+      },
+      timestamp: agentMessage.createTime,
+    );
   }
 
   OpenToolDirectory _resolveOpenToolDirectory() {

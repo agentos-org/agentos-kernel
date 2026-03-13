@@ -1,11 +1,19 @@
 import '../perception/model.dart';
 
+@Deprecated(
+  'Planning is deprecated and will be removed in a future release. '
+  'Prefer direct execution-oriented flow.',
+)
 enum PlanDecision {
   ready,
   needsConfirmation,
   rejected,
 }
 
+@Deprecated(
+  'Planning is deprecated and will be removed in a future release. '
+  'Prefer direct execution-oriented flow.',
+)
 class ConfirmationRequest {
   final String prompt;
 
@@ -14,6 +22,10 @@ class ConfirmationRequest {
   });
 }
 
+@Deprecated(
+  'Planning is deprecated and will be removed in a future release. '
+  'Prefer direct execution-oriented flow.',
+)
 class PlanResult {
   final Intent? intent;
   final PlanDecision decision;

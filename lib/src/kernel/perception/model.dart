@@ -22,6 +22,10 @@ class Percept {
   });
 }
 
+@Deprecated(
+  'Intent is deprecated and will be removed in a future release. '
+  'Prefer direct execution-oriented flow instead of intent handoff.',
+)
 class Intent {
   final String action;
   final String? target;

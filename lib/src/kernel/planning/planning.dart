@@ -15,6 +15,10 @@ import '../perception/model.dart';
 import '../preference/model.dart';
 import 'model.dart';
 
+@Deprecated(
+  'Planning is deprecated and will be removed in a future release. '
+  'Prefer direct execution-oriented flow.',
+)
 abstract class Planning {
   Future<PlanResult> create(
     Percept percept,
@@ -23,6 +27,10 @@ abstract class Planning {
   );
 }
 
+@Deprecated(
+  'Planning is deprecated and will be removed in a future release. '
+  'Prefer direct execution-oriented flow.',
+)
 class SwitchablePlanning implements Planning {
   Planning _delegate;
 
@@ -44,6 +52,10 @@ class SwitchablePlanning implements Planning {
   }
 }
 
+@Deprecated(
+  'Planning is deprecated and will be removed in a future release. '
+  'Prefer direct execution-oriented flow.',
+)
 class ThrowingPlanning implements Planning {
   final String message;
 
@@ -59,6 +71,10 @@ class ThrowingPlanning implements Planning {
   }
 }
 
+@Deprecated(
+  'Planning is deprecated and will be removed in a future release. '
+  'Prefer direct execution-oriented flow.',
+)
 class RuleBasedPlanning extends Planning {
   final double minConfidence;
   final double minDelta;
@@ -164,6 +180,10 @@ class RuleBasedPlanning extends Planning {
   }
 }
 
+@Deprecated(
+  'Planning is deprecated and will be removed in a future release. '
+  'Prefer direct execution-oriented flow.',
+)
 class LiteAgentPlanning extends Planning {
   final LlmQueue llmQueue;
   final LiteAgentClient client;

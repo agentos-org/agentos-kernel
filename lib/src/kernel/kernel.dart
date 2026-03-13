@@ -103,6 +103,10 @@ class Kernel {
     return jobManager.getHandle(jobId);
   }
 
+  @Deprecated(
+    'Planning-driven confirmation is deprecated and will be removed in a '
+    'future release. Prefer direct execution-oriented APIs.',
+  )
   JobHandle confirmJob(String jobId, {required bool confirmed}) {
     final snapshot = jobManager.getSnapshot(jobId);
     if (snapshot.status != JobStatus.NEEDS_CONFIRMATION) {
