@@ -3,6 +3,10 @@
 This repo exposes a service-first API for the kernel flow (perception → planning → execution).
 Only `KernelService` is intended for external use; kernel internals are not part of the public API.
 
+Note: planning-driven intent handoff is being phased out. Deprecated planning APIs remain available
+for compatibility, but new integrations should prefer direct execution-oriented APIs and
+`ingestAgentMessageForLearning(...)` for external agent transcripts.
+
 ## Quick start
 
 Install dependencies:
@@ -28,21 +32,25 @@ Create:
     operations (perception/planning/learning/summarization) throw `StateError`.
   - If embeddings cannot be configured, the vector store throws `StateError` when used.
 
-Runtime (Intent Flow):
-- `submitRaw({source, content, data})` → `JobHandle`
-  - Main entry: submit user content and optional structured data.
-- `submitIntent({source, intent})` → `JobHandle`
-  - Submit a chosen intent candidate directly (bypasses perception).
-- `confirmJob(jobId, confirmed: bool)` → `JobHandle`
-  - Confirm or reject a job that requires confirmation.
+Runtime:
 - `subscribeConfirmation({jobId, onNeedsConfirmation})` → `ConfirmationListener`
   - Listen for `NEEDS_CONFIRMATION` updates only. Call `cancel()` to stop listening.
 - `createLlmMetrics({requestId, baseUrl, model, apiKey, jobId, userId})` → `LlmMetrics`
   - Report external LLM performance metrics into supervision.
+- `ingestAgentMessageForLearning({userId, bundleId, agentMessage})`
+  - Record an external `AgentMessage` into memory and forward it into preference learning.
+
+Deprecated runtime APIs:
 - `recordAgentMessage({userId, bundleId, agentMessage})`
-  - Record an external AgentMessage into memory under the bundle scope.
+  - Deprecated. Only records the external `AgentMessage` into memory.
 - `suggestNextAction({source, allowedActions, memoryLimit})` → `IntentResponseDto`
-  - Suggest an intent candidate when there is no user input.
+  - Deprecated. Legacy planning-oriented intent suggestion API.
+- `submitRaw({source, content, data})` → `JobHandle`
+  - Deprecated. Legacy intent flow entrypoint.
+- `submitIntent({source, intent})` → `JobHandle`
+  - Deprecated. Legacy direct intent submission API.
+- `confirmJob(jobId, confirmed: bool)` → `JobHandle`
+  - Deprecated. Legacy confirmation API for planning-driven jobs.
 
 Tools (Planning/Execution):
 - `registerLocalOpenTool(Tool tool)`
@@ -141,6 +149,7 @@ Use `getExternalServiceHealth()` for a snapshot and
 
 - Perception: turns raw user input into intent candidates. Uses LiteAgent + LLM; reads memory and preference snapshots for context (no direct persistence).
 - Planning: selects the next action based on intent candidates and available tools. Uses LiteAgent + LLM; no direct persistence.
+  This module is deprecated and retained for compatibility with legacy intent flows.
 - Execution: executes the chosen intent, typically via OpenTool. Emits tool call events; tool calls can be persisted via Drift when enabled.
 - Memory: stores and retrieves long-term records (Drift/SQLite3). Older records can be summarized into `MEMORY_SUMMARY` entries via LiteAgent.
   Planning uses summaries plus recent detailed records for context. Preference learning is deferred and runs when LLM is idle by default.

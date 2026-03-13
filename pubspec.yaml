@@ -1,10 +1,10 @@
 name: agentos_kernel
 description: Kernel modules for agent orchestration and memory.
 version: 0.1.0
-repository: https://github.com/agentos-org/agentos_kernel
+repository: https://github.com/agentos-org/agentos-kernel
 
 environment:
-  sdk: ^3.10.3
+  sdk: ">=3.8.0 <4.0.0"
 
 dependencies:
   drift: ^2.30.1

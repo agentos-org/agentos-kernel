@@ -3,6 +3,10 @@
 本仓库对外仅提供 Service 入口，核心流程为（感知 → 规划 → 执行）。
 外部只建议使用 `KernelService`，kernel 内部实现不作为公开 API。
 
+说明：基于 planning 的意图中转流程正在逐步淘汰。为兼容保留了已弃用 API，
+但新的集成应优先使用面向直接执行的接口，以及
+`ingestAgentMessageForLearning(...)` 来接入外部 agent 对话。
+
 ## 快速开始
 
 安装依赖：
@@ -28,21 +32,25 @@ dart run example/service_example.dart
     感知/规划/学习/摘要等依赖 LLM 的逻辑会抛出 `StateError`。
   - embeddings 无法配置时，向量存储在调用时会抛出 `StateError`。
 
-运行时（意图流程）：
-- `submitRaw({source, content, data})` → `JobHandle`
-  - 主入口：提交用户内容和可选结构化数据。
-- `submitIntent({source, intent})` → `JobHandle`
-  - 直接提交已选定意图（跳过感知）。
-- `confirmJob(jobId, confirmed: bool)` → `JobHandle`
-  - 对需要确认的任务进行确认/拒绝。
+运行时：
 - `subscribeConfirmation({jobId, onNeedsConfirmation})` → `ConfirmationListener`
   - 仅订阅 `NEEDS_CONFIRMATION` 更新；通过 `cancel()` 取消订阅。
 - `createLlmMetrics({requestId, baseUrl, model, apiKey, jobId, userId})` → `LlmMetrics`
   - 将外部 LLM 性能指标上报给 supervision。
+- `ingestAgentMessageForLearning({userId, bundleId, agentMessage})`
+  - 将外部 `AgentMessage` 写入 memory，并继续送入偏好学习流程。
+
+已弃用运行时 API：
 - `recordAgentMessage({userId, bundleId, agentMessage})`
-  - 记录外部 AgentMessage 到 memory（按 bundle 归档）。
+  - 已弃用。仅将外部 `AgentMessage` 写入 memory。
 - `suggestNextAction({source, allowedActions, memoryLimit})` → `IntentResponseDto`
-  - 在无用户输入时给出意图候选建议。
+  - 已弃用。旧的、面向 planning 的意图建议接口。
+- `submitRaw({source, content, data})` → `JobHandle`
+  - 已弃用。旧的意图流提交入口。
+- `submitIntent({source, intent})` → `JobHandle`
+  - 已弃用。旧的直接提交意图接口。
+- `confirmJob(jobId, confirmed: bool)` → `JobHandle`
+  - 已弃用。旧的、服务于 planning 流程的确认接口。
 
 工具（规划/执行）：
 - `registerLocalOpenTool(Tool tool)`
@@ -137,6 +145,7 @@ Adaptive supervision 会轮询外部服务：
 
 - 感知（Perception）：将用户输入转换为意图候选，使用 LiteAgent + LLM；读取记忆/偏好快照做上下文补充（不直接持久化）。
 - 规划（Planning）：基于意图候选与可用工具选择下一步动作，使用 LiteAgent + LLM（不直接持久化）。
+  该模块已弃用，当前仅为兼容旧意图流而保留。
 - 执行（Execution）：执行已选意图，通常通过 OpenTool；产生工具调用事件；工具调用记录可通过 Drift 持久化（可选）。
 - 记忆（Memory）：长期记录存取（Drift/SQLite3），较早记录可通过 LiteAgent 摘要成 `MEMORY_SUMMARY`，
   规划时同时使用摘要与近期细节作为上下文。偏好学习默认在 LLM 空闲时延迟执行。
