@@ -352,7 +352,10 @@ class LiteAgentPlanning extends Planning {
               'name': 'arguments',
               'description': 'Function arguments.',
               'required': true,
-              'schema': {'type': 'object'},
+              'schema': {
+                'type': 'object',
+                'properties': {},
+              },
             },
             {
               'name': 'confidence',
@@ -394,7 +397,13 @@ class LiteAgentPlanning extends Planning {
               'name': 'content',
               'description': 'List of LiteAgent content objects.',
               'required': false,
-              'schema': {'type': 'array'},
+              'schema': {
+                'type': 'array',
+                'items': {
+                  'type': 'object',
+                  'properties': {},
+                },
+              },
             },
             {
               'name': 'text',

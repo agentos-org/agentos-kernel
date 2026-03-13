@@ -129,7 +129,10 @@ class LiteAgentLearning implements Learning {
               'name': 'metadata',
               'description': 'Optional metadata payload.',
               'required': false,
-              'schema': {'type': 'object'},
+              'schema': {
+                'type': 'object',
+                'properties': {},
+              },
             },
           ],
         },

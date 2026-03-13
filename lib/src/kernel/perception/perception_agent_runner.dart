@@ -150,7 +150,10 @@ class PerceptionAgentRunner {
               'name': 'payload',
               'description': 'Intent payload object.',
               'required': true,
-              'schema': {'type': 'object'},
+              'schema': {
+                'type': 'object',
+                'properties': {},
+              },
             },
             {
               'name': 'confidence',
