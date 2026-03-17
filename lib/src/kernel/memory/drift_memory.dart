@@ -105,6 +105,26 @@ INSERT INTO memory_records (
   }
 
   @override
+  Future<void> deleteAllRecords({String? scope, String? type}) async {
+    await _ensureOpen();
+    final where = <String>[];
+    final args = <Object?>[];
+    if (scope != null && scope.isNotEmpty) {
+      where.add('scope = ?');
+      args.add(scope);
+    }
+    if (type != null && type.isNotEmpty) {
+      where.add('type = ?');
+      args.add(type);
+    }
+    final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    await _executor.runCustom(
+      'DELETE FROM memory_records $whereClause;',
+      args,
+    );
+  }
+
+  @override
   Future<List<MemoryRecord>> listRecords({
     String? scope,
     String? userId,
@@ -114,6 +134,7 @@ INSERT INTO memory_records (
     int offset = 0,
     int? limit,
     bool includeSummaries = false,
+    bool descending = false,
   }) async {
     await _ensureOpen();
     final rows = await _listDetailRows(
@@ -125,6 +146,7 @@ INSERT INTO memory_records (
       offset: offset,
       limit: limit,
       includeSummaries: includeSummaries,
+      descending: descending,
     );
     return rows.map(_recordFromRow).toList();
   }
@@ -352,6 +374,7 @@ WHERE id IN (
     int offset = 0,
     int? limit,
     bool includeSummaries = false,
+    bool descending = false,
   }) {
     final where = <String>[];
     final args = <Object?>[];
@@ -384,6 +407,7 @@ WHERE id IN (
     final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
     final limitClause = (limit == null || limit <= 0) ? '' : 'LIMIT $limit';
     final offsetClause = offset <= 0 ? '' : 'OFFSET $offset';
+    final orderDirection = descending ? 'DESC' : 'ASC';
     return _executor.runSelect('''
 SELECT
   id,
@@ -396,7 +420,7 @@ SELECT
   timestamp
 FROM memory_records
 $whereClause
-ORDER BY timestamp ASC
+ORDER BY timestamp $orderDirection
 $limitClause
 $offsetClause;
 ''', args);

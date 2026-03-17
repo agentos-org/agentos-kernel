@@ -218,6 +218,8 @@ class KernelService {
   final SwitchableTextQueryVectorStore? _preferenceVectorStore;
   bool _memorySummarizerStarted;
   bool _preferenceAggregatorStarted;
+  MemorySummarizer? _memorySummarizer;
+  PreferenceAggregator? _preferenceAggregator;
   final _JobSnapshotDispatcher _jobSnapshotDispatcher;
   AppCalledTool? _appCalledTool;
   final KernelRuntimeConfig _runtimeConfig;
@@ -528,10 +530,12 @@ class KernelService {
 
     var memorySummarizerStarted = false;
     var preferenceAggregatorStarted = false;
+    MemorySummarizer? memorySummarizer;
+    PreferenceAggregator? preferenceAggregator;
     if (config.runtime.memorySummaryEnabled &&
         llmConfig != null &&
         llmConfigPool != null) {
-      MemorySummarizer(
+      memorySummarizer = MemorySummarizer(
         memory: longTermMemory,
         llmQueue: llmQueue,
         client: liteAgentClient,
@@ -557,7 +561,7 @@ class KernelService {
     if (config.runtime.preferenceAggregationEnabled &&
         llmConfig != null &&
         llmConfigPool != null) {
-      final aggregator = PreferenceAggregator(
+      preferenceAggregator = PreferenceAggregator(
         preference: basePreference,
         llmQueue: llmQueue,
         client: liteAgentClient,
@@ -576,10 +580,10 @@ class KernelService {
         queueLimit: config.runtime.preferenceAggregationQueueLimit,
         enabled: true,
       );
-      preference.onSignalRecorded = aggregator.markDirty;
+      preference.onSignalRecorded = preferenceAggregator.markDirty;
       preferenceAggregatorStarted = true;
     }
-    return KernelService._internal(
+    final service = KernelService._internal(
       kernel,
       llmConfigPool: llmConfigPool,
       perceptionSwitch: perceptionDelegateSwitch,
@@ -600,6 +604,9 @@ class KernelService {
       embeddingsBaseUrl: config.embeddings.baseUrl,
       modelProfiler: modelProfiler,
     );
+    service._memorySummarizer = memorySummarizer;
+    service._preferenceAggregator = preferenceAggregator;
+    return service;
   }
 
   ConfirmationListener subscribeConfirmation({
@@ -839,7 +846,7 @@ class KernelService {
     if (_runtimeConfig.memorySummaryEnabled &&
         !_memorySummarizerStarted &&
         _driftMemory != null) {
-      MemorySummarizer(
+      _memorySummarizer = MemorySummarizer(
         memory: _driftMemory,
         llmQueue: llmQueue,
         client: liteAgentClient,
@@ -870,7 +877,7 @@ class KernelService {
           'Preference aggregation requires AggregatingPreference wrapper.',
         );
       }
-      final aggregator = PreferenceAggregator(
+      _preferenceAggregator = PreferenceAggregator(
         preference: preference.delegate,
         llmQueue: llmQueue,
         client: liteAgentClient,
@@ -889,7 +896,7 @@ class KernelService {
         queueLimit: _runtimeConfig.preferenceAggregationQueueLimit,
         enabled: true,
       );
-      preference.onSignalRecorded = aggregator.markDirty;
+      preference.onSignalRecorded = _preferenceAggregator!.markDirty;
       _preferenceAggregatorStarted = true;
     }
   }
@@ -1416,6 +1423,79 @@ class KernelService {
     final tool = _ensureAppCalledTool();
     tool.updateHandler(handler);
   }
+
+  // ---------------------------------------------------------------------------
+  // Debug API
+  // ---------------------------------------------------------------------------
+
+  Future<List<MemoryRecord>> listAllMemoryRecords({
+    String? type,
+    String? scope,
+    int offset = 0,
+    int limit = 50,
+    bool descending = false,
+  }) {
+    return _kernel.memory.listRecords(
+      type: type,
+      scope: scope,
+      offset: offset,
+      limit: limit,
+      includeSummaries: true,
+      descending: descending,
+    );
+  }
+
+  Future<List<String>> listMemoryScopes() async {
+    final driftMemory = _driftMemory;
+    if (driftMemory != null) {
+      return driftMemory.listScopes();
+    }
+    return const [];
+  }
+
+  Future<List<PreferenceSignal>> listPreferenceSignals({
+    String? userId,
+  }) {
+    return _kernel.preference.listSignals(
+      userId: userId ?? _defaultUserId,
+    );
+  }
+
+  Future<MemoryRecord?> triggerMemorySummarization({
+    String? scope,
+  }) async {
+    final summarizer = _memorySummarizer;
+    if (summarizer == null) return null;
+    final targetScope = scope ??
+        (await listMemoryScopes()).firstOrNull;
+    if (targetScope == null) return null;
+    return summarizer.summarizeScope(scope: targetScope);
+  }
+
+  Future<Map<String, dynamic>> triggerPreferenceAggregation({
+    String? userId,
+  }) async {
+    final aggregator = _preferenceAggregator;
+    if (aggregator == null) return const {};
+    return aggregator.aggregateUser(userId: userId ?? _defaultUserId);
+  }
+
+  Future<void> deleteAllMemoryRecords({
+    String? type,
+    String? scope,
+  }) {
+    return _kernel.memory.deleteAllRecords(scope: scope, type: type);
+  }
+
+  Future<void> clearPreferences({String? userId}) {
+    return _kernel.preference.savePreferences(
+      const {},
+      userId: userId ?? _defaultUserId,
+    );
+  }
+
+  bool get debugMemorySummarizerAvailable => _memorySummarizer != null;
+  bool get debugPreferenceAggregatorAvailable => _preferenceAggregator != null;
 
   // Debug/admin accessors live in KernelAdminService.
 

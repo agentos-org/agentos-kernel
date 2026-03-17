@@ -11,9 +11,11 @@ abstract class Memory {
     int offset = 0,
     int? limit,
     bool includeSummaries = false,
+    bool descending = false,
   });
   Future<void> record(MemoryRecord record);
   Future<void> deleteRecord(String id);
+  Future<void> deleteAllRecords({String? scope, String? type});
 }
 
 class InMemoryMemory extends Memory {
@@ -65,6 +67,7 @@ class InMemoryMemory extends Memory {
     int offset = 0,
     int? limit,
     bool includeSummaries = false,
+    bool descending = false,
   }) async {
     var records = _records
         .where((record) {
@@ -92,7 +95,9 @@ class InMemoryMemory extends Memory {
           return true;
         })
         .toList(growable: false);
-    records.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    records.sort(descending
+        ? (a, b) => b.timestamp.compareTo(a.timestamp)
+        : (a, b) => a.timestamp.compareTo(b.timestamp));
     if (offset > 0) {
       if (offset >= records.length) {
         return const [];
@@ -108,6 +113,19 @@ class InMemoryMemory extends Memory {
   @override
   Future<void> deleteRecord(String id) async {
     _records.removeWhere((record) => record.id == id);
+  }
+
+  @override
+  Future<void> deleteAllRecords({String? scope, String? type}) async {
+    _records.removeWhere((record) {
+      if (scope != null && scope.isNotEmpty && record.scope != scope) {
+        return false;
+      }
+      if (type != null && type.isNotEmpty && record.type != type) {
+        return false;
+      }
+      return true;
+    });
   }
 
   MemoryRecord? _latestDataRecord(List<MemoryRecord> records, String type) {
