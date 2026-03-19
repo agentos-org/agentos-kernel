@@ -7,6 +7,7 @@ import '../agent/config.dart';
 import '../agent/llm_queue.dart';
 import '../agent/liteagent_client.dart';
 import '../agent/model.dart';
+import '../content/content_normalizer.dart';
 import '../logging/logger.dart';
 import 'model.dart';
 import 'preference.dart';
@@ -97,14 +98,15 @@ class PreferenceAggregator {
       return const {};
     }
 
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(
+      llmConfigResolver?.call() ?? llmConfig,
+    );
     final currentPreferences = await preference.listPreferences(userId: userId);
     final prompt = _buildPrompt(
       userId: userId,
       currentPreferences: currentPreferences,
       signals: signals,
-    );
-    final effectiveConfig = normalizeLlmConfigForLiteAgent(
-      llmConfigResolver?.call() ?? llmConfig,
+      llmConfig: effectiveConfig,
     );
     final modelKey = buildLlmModelKey(
       baseUrl: effectiveConfig.baseUrl,
@@ -136,6 +138,7 @@ class PreferenceAggregator {
     required String userId,
     required Map<String, dynamic> currentPreferences,
     required List<PreferenceSignal> signals,
+    required LLMConfig llmConfig,
   }) {
     final buffer = StringBuffer();
     buffer.writeln('User: $userId');
@@ -145,7 +148,10 @@ class PreferenceAggregator {
       buffer.writeln(
         jsonEncode({
           'text': signal.text,
-          'metadata': signal.metadata,
+          'metadata': normalizeStructuredValueForModel(
+            signal.metadata,
+            llmConfig,
+          ),
           'timestamp': signal.timestamp.toIso8601String(),
         }),
       );

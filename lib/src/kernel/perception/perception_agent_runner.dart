@@ -8,6 +8,7 @@ import '../kernel.dart';
 import '../agent/llm_queue.dart';
 import '../agent/config.dart';
 import '../agent/model.dart';
+import '../content/content_normalizer.dart';
 import '../logging/logger.dart';
 import '../perception/input.dart';
 import '../job_manager.dart';
@@ -78,7 +79,10 @@ class PerceptionAgentRunner {
       userId: context.userId,
       run: (callContext) async {
         final session = await _getOrCreateSession(context.sessionId);
-        final task = UserTask(content: context.content, isChunk: true);
+        final task = UserTask(
+          content: normalizeContentForModel(context.content, effectiveConfig),
+          isChunk: true,
+        );
         final handler = _PerceptionAgentHandler(
           context: context,
           kernel: kernel,
@@ -150,10 +154,7 @@ class PerceptionAgentRunner {
               'name': 'payload',
               'description': 'Intent payload object.',
               'required': true,
-              'schema': {
-                'type': 'object',
-                'properties': {},
-              },
+              'schema': {'type': 'object', 'properties': {}},
             },
             {
               'name': 'confidence',

@@ -71,10 +71,7 @@ class LlmCallContext {
   int? totalTokens;
   double? contextUsageRatio;
 
-  LlmCallContext({
-    required this.meta,
-    required this.onFirstToken,
-  });
+  LlmCallContext({required this.meta, required this.onFirstToken});
 
   void markFirstToken() {
     if (firstTokenAt != null) {
@@ -97,6 +94,7 @@ class KernelLlmModel {
   final String baseUrl;
   final String model;
   final String? apiKey;
+  final String? type;
   final String description;
   final String parameters;
   final num paramsB;
@@ -109,6 +107,7 @@ class KernelLlmModel {
     required this.baseUrl,
     required this.model,
     this.apiKey,
+    this.type,
     required this.description,
     required this.parameters,
     required this.paramsB,
@@ -125,6 +124,37 @@ class KernelLlmModel {
       apiKey: apiKeyOverride ?? apiKey ?? '',
     );
   }
+
+  bool get supportsImageInput {
+    final normalizedType = type?.trim().toLowerCase();
+    return normalizedType == 'image_text_to_text' ||
+        normalizedType == 'imagetexttotext';
+  }
+}
+
+final Map<String, bool> _supportsImageInputByModelKey = {};
+
+void registerKernelLlmModels(Iterable<KernelLlmModel> models) {
+  _supportsImageInputByModelKey
+    ..clear()
+    ..addEntries(
+      models.map(
+        (model) => MapEntry(model.modelKey(), model.supportsImageInput),
+      ),
+    );
+}
+
+bool? lookupModelSupportsImageInput({
+  required String baseUrl,
+  required String model,
+  String? apiKey,
+}) {
+  final modelKey = buildLlmModelKey(
+    baseUrl: baseUrl,
+    model: model,
+    apiKey: apiKey,
+  );
+  return _supportsImageInputByModelKey[modelKey];
 }
 
 String buildLlmModelKey({

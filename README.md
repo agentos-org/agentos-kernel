@@ -39,6 +39,19 @@ Runtime:
   - Report external LLM performance metrics into supervision.
 - `ingestAgentMessageForLearning({userId, bundleId, agentMessage})`
   - Record an external `AgentMessage` into memory and forward it into preference learning.
+- Cron tasks:
+  - `createCronTask({name, schedule, spec, source, userId, sessionId, timezone, concurrency, enabled})` → `Future<CronTaskDto>`
+  - `updateCronTask({cronId, name, schedule, spec, timezone, concurrency, enabled})` → `Future<CronTaskDto>`
+  - `deleteCronTask(cronId)` → `Future<void>`
+  - `getCronTask(cronId)` → `Future<CronTaskDto>`
+  - `listCronTasks({enabled, source, offset, limit})` → `Future<List<CronTaskListItemDto>>`
+  - `pauseCronTask(cronId)` / `resumeCronTask(cronId)` → `Future<CronTaskDto>`
+  - `runCronTaskNow(cronId, {scheduledAt})` → `Future<CronRunDto>`
+  - `getCronRun(runId)` → `Future<CronRunDto>`
+  - `listCronRuns({cronId, after, before, offset, limit})` → `Future<List<CronRunListItemDto>>`
+  - `listCronRunMessages(runId, {offset, limit})` → `Future<List<CronRunMessageDto>>`
+  - `getCronSchedulerSnapshot()` → `Future<CronSchedulerSnapshotDto>`
+  - `startCronScheduler()` / `stopCronScheduler()` → `Future<void>`
 
 Deprecated runtime APIs:
 - `recordAgentMessage({userId, bundleId, agentMessage})`
@@ -151,6 +164,8 @@ Use `getExternalServiceHealth()` for a snapshot and
 - Planning: selects the next action based on intent candidates and available tools. Uses LiteAgent + LLM; no direct persistence.
   This module is deprecated and retained for compatibility with legacy intent flows.
 - Execution: executes the chosen intent, typically via OpenTool. Emits tool call events; tool calls can be persisted via Drift when enabled.
+- Cron: schedules recurring tasks and dispatches them into LiteAgent Auto Multi-Agent sessions via the LiteAgent SDK.
+  Current implementation uses an in-memory task store and run log.
 - Memory: stores and retrieves long-term records (Drift/SQLite3). Older records can be summarized into `MEMORY_SUMMARY` entries via LiteAgent.
   Planning uses summaries plus recent detailed records for context. Preference learning is deferred and runs when LLM is idle by default.
 - Preference: stores user preference signals (Hive) and embeddings (LiteEmbeddings vector DB). Used during perception enrichment.
@@ -173,6 +188,75 @@ High-level call flow:
 - SQLite3 (Drift, memory): `DriftMemory` persists memory records; override `KernelRuntimeConfig.memoryDbPath` to change the SQLite location.
 - SQLite3 (optional via Drift): `DriftToolCallStore` persists tool call records when enabled; independent of the main memory/job flow.
 - Vector DB (LiteEmbeddings): stores and queries preference embeddings; used for preference enrichment during perception.
+- Cron tasks/runs: currently in-memory only. They are not restored after process restart yet.
+
+## Cron Tasks
+
+Use cron tasks when the host application wants to schedule recurring LiteAgent Auto Multi-Agent jobs.
+
+Each cron task contains:
+- A cron expression such as `0 */1 * * *`
+- A service-level source/user/session identity
+- An `AgentCronSpecDto` that maps to LiteAgent `Capability + UserTask`
+
+`AgentCronSpecDto` fields:
+- `systemPrompt`: root system prompt for the LiteAgent session
+- `content`: LiteAgent `UserTask.content`, allowing text and image inputs
+- `timeoutSeconds`: max end-to-end execution time
+
+Model selection:
+- Cron tasks do not accept external `llmConfig` or `llmConfigList`.
+- The executor resolves the current model from the kernel's available LLM pool at run time.
+- Auto mode is always enabled for cron execution.
+- Cron tasks do not accept external `openSpecList` or `callbackOpenTool`.
+- Tool availability is loaded dynamically from OpenTool daemon at run time.
+- Call `setCronOpenToolDaemonApiKey(...)` before running cron tasks that need daemon tools.
+
+Minimal example:
+
+```dart
+final service = await KernelService.create(
+  KernelServiceConfig(
+    liteAgentSdk: LiteAgentSDK(
+      baseUrl: '<LITEAGENT_BASE_URL>',
+      apiKey: '<LITEAGENT_API_KEY>',
+    ),
+    embeddings: const EmbeddingsConfig(
+      baseUrl: '<LITE_EMBEDDINGS_BASE_URL>',
+      docsName: 'kernel',
+    ),
+  ),
+);
+
+final task = await service.createCronTask(
+  name: 'Nightly CRM Sync',
+  schedule: '0 2 * * *',
+  source: KernelSources.api,
+  spec: AgentCronSpecDto(
+    systemPrompt: 'You are an Auto Multi-Agent operator.',
+    content: const [
+      Content(
+        type: ContentType.text,
+        message: 'Sync CRM records and summarize failures.',
+      ),
+    ],
+  ),
+);
+
+service.startCronScheduler();
+
+final run = await service.runCronTaskNow(task.cronId);
+print(run.status);
+```
+
+Current behavior and limits:
+- Cron execution uses LiteAgent SDK sessions directly. It does not go through the deprecated kernel planning flow.
+- LLM model selection comes from the kernel's currently available LLM list, not from per-task input.
+- Cron tool availability is resolved dynamically from OpenTool daemon for each run.
+- Each scheduled run creates a fresh LiteAgent session.
+- `skipIfRunning` is the default concurrency policy.
+- `replace` is not implemented yet and is reported as a cancelled run.
+- The final run result is derived from the last received LiteAgent message.
 
 ## Example configuration
 

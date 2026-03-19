@@ -5,6 +5,45 @@ import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('KernelLlmModel', () {
+    test('supportsImageInput recognizes vision-language model types', () {
+      const snakeCase = KernelLlmModel(
+        baseUrl: 'http://127.0.0.1:1234',
+        model: 'qwen2.5-vl-7b',
+        type: 'image_text_to_text',
+        description: 'vl model',
+        parameters: '7B',
+        paramsB: 7,
+        quantization: 'q4',
+        sizeGB: 5,
+      );
+      const camelCase = KernelLlmModel(
+        baseUrl: 'http://127.0.0.1:1234',
+        model: 'gemma3-4b',
+        type: 'imageTextToText',
+        description: 'vl model',
+        parameters: '4B',
+        paramsB: 4,
+        quantization: 'q4',
+        sizeGB: 3,
+      );
+      const textOnly = KernelLlmModel(
+        baseUrl: 'http://127.0.0.1:1234',
+        model: 'qwen3-8b',
+        type: 'textGeneration',
+        description: 'text model',
+        parameters: '8B',
+        paramsB: 8,
+        quantization: 'q4',
+        sizeGB: 4,
+      );
+
+      expect(snakeCase.supportsImageInput, isTrue);
+      expect(camelCase.supportsImageInput, isTrue);
+      expect(textOnly.supportsImageInput, isFalse);
+    });
+  });
+
   group('LlmConfigPool routing', () {
     test(
       'economy mode falls back to remote when pool has no cheaper source',

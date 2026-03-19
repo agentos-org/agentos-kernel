@@ -69,7 +69,9 @@ class LlmConfigPool {
               source: m.source,
             ),
           )
-          .toList();
+          .toList() {
+    registerKernelLlmModels(models);
+  }
 
   List<LLMConfig> get configs =>
       _entries.map((e) => e.config).toList(growable: false);
@@ -81,6 +83,7 @@ class LlmConfigPool {
   }
 
   void updateFromModels(List<KernelLlmModel> models) {
+    registerKernelLlmModels(models);
     _entries = models
         .map(
           (m) => _PoolEntry(

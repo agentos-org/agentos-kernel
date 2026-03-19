@@ -1,6 +1,7 @@
 library;
 
 export 'src/kernel/job_manager.dart';
+export 'src/kernel/cron/model.dart';
 export 'src/kernel/agent/llm_metrics.dart';
 export 'src/kernel/agent/model.dart';
 export 'src/kernel/execution/app_called_tool.dart';

@@ -12,6 +12,12 @@ import 'package:opentool_dart/opentool_client.dart';
 import '../kernel/execution/execution.dart';
 import '../kernel/execution/open_tool_directory.dart';
 import '../kernel/execution/app_called_tool.dart';
+import '../kernel/cron/daemon_open_spec_provider.dart';
+import '../kernel/cron/llm_config_access.dart';
+import '../kernel/cron/liteagent_executor.dart';
+import '../kernel/cron/model.dart';
+import '../kernel/cron/module.dart';
+import '../kernel/cron/store.dart';
 import '../kernel/job_manager.dart';
 import '../kernel/job_manager_hive.dart';
 import '../kernel/kernel.dart';
@@ -100,6 +106,9 @@ class KernelRuntimeConfig {
   final int opentoolDaemonPort;
   final KernelMode mode;
   final String modelProfileBoxName;
+  final String cronTaskBoxName;
+  final String cronRunBoxName;
+  final String cronRunMessageBoxName;
   final double profileSuccessRateThreshold;
 
   const KernelRuntimeConfig({
@@ -132,6 +141,9 @@ class KernelRuntimeConfig {
     this.opentoolDaemonPort = DAEMON_DEFAULT_PORT,
     this.mode = KernelMode.balanced,
     this.modelProfileBoxName = 'kernel_model_profiles',
+    this.cronTaskBoxName = 'kernel_cron_tasks',
+    this.cronRunBoxName = 'kernel_cron_runs',
+    this.cronRunMessageBoxName = 'kernel_cron_run_messages',
     this.profileSuccessRateThreshold = 0.4,
   });
 }
@@ -232,6 +244,9 @@ class KernelService {
   String? _openToolDaemonSyncApiKey;
   Duration _openToolDaemonSyncDebounce = const Duration(milliseconds: 200);
   DaemonPresetFilter? _openToolDaemonPresetFilter;
+  final CronModule? _cronModule;
+  final CronDaemonOpenSpecProvider? _cronDaemonAccess;
+  final CronLlmConfigAccess? _cronLlmConfigAccess;
 
   /// Wraps the kernel with a simplified API for external callers.
   factory KernelService(
@@ -254,6 +269,7 @@ class KernelService {
     int? opentoolDaemonPort,
     String embeddingsBaseUrl = '',
     ModelProfiler? modelProfiler,
+    CronModule? cronModule,
   }) {
     return KernelService._internal(
       kernel,
@@ -275,6 +291,7 @@ class KernelService {
       opentoolDaemonPort: opentoolDaemonPort,
       embeddingsBaseUrl: embeddingsBaseUrl,
       modelProfiler: modelProfiler,
+      cronModule: cronModule,
     );
   }
 
@@ -299,6 +316,9 @@ class KernelService {
     int? opentoolDaemonPort,
     String embeddingsBaseUrl = '',
     ModelProfiler? modelProfiler,
+    CronModule? cronModule,
+    CronDaemonOpenSpecProvider? cronDaemonAccess,
+    CronLlmConfigAccess? cronLlmConfigAccess,
   }) : _perceptionRunner = perceptionRunner,
        _llmConfigPool = llmConfigPool,
        _perceptionSwitch = perceptionSwitch,
@@ -321,7 +341,10 @@ class KernelService {
            opentoolDaemonPort ?? runtimeConfig.opentoolDaemonPort,
        _embeddingsBaseUrl = embeddingsBaseUrl,
        _mode = runtimeConfig.mode,
-       _modelProfiler = modelProfiler;
+       _modelProfiler = modelProfiler,
+       _cronModule = cronModule,
+       _cronDaemonAccess = cronDaemonAccess,
+       _cronLlmConfigAccess = cronLlmConfigAccess;
 
   String get defaultUserId => _defaultUserId;
 
@@ -331,6 +354,7 @@ class KernelService {
 
   void setMode(KernelMode mode) {
     _mode = mode;
+    _cronLlmConfigAccess?.mode = mode;
   }
 
   static Future<KernelService> create({
@@ -431,6 +455,11 @@ class KernelService {
     final modelProfileBox = await Hive.openBox<Map>(
       config.runtime.modelProfileBoxName,
     );
+    final cronTaskBox = await Hive.openBox<Map>(config.runtime.cronTaskBoxName);
+    final cronRunBox = await Hive.openBox<Map>(config.runtime.cronRunBoxName);
+    final cronRunMessageBox = await Hive.openBox<Map>(
+      config.runtime.cronRunMessageBoxName,
+    );
     final modelProfiler = ModelProfiler(box: modelProfileBox);
     supervision.setModelProfiler(modelProfiler);
 
@@ -530,6 +559,35 @@ class KernelService {
 
     var memorySummarizerStarted = false;
     var preferenceAggregatorStarted = false;
+    final cronDaemonAccess = CronDaemonOpenSpecProvider(
+      host: config.runtime.opentoolDaemonHost,
+      port: config.runtime.opentoolDaemonPort,
+      logger: logger,
+      mapToOpenSpec: KernelService._daemonToolToOpenSpec,
+    );
+    final cronLlmConfigAccess = CronLlmConfigAccess(
+      pool: llmConfigPool,
+      llmQueue: llmQueue,
+      supervision: supervision,
+      profiler: modelProfiler,
+      mode: config.runtime.mode,
+      profileSuccessRateThreshold: config.runtime.profileSuccessRateThreshold,
+      purpose: 'cron',
+    );
+    final cronModule = CronModule(
+      store: HiveCronTaskStore(
+        taskBox: cronTaskBox,
+        runBox: cronRunBox,
+        messageBox: cronRunMessageBox,
+      ),
+      executor: LiteAgentCronExecutor(
+        sdkResolver: () => liteAgentClient.sdk,
+        logger: logger,
+        llmConfigResolver: cronLlmConfigAccess.resolve,
+        llmConfigListResolver: cronLlmConfigAccess.resolveAll,
+        daemonOpenSpecResolver: cronDaemonAccess.resolveOpenSpecs,
+      ),
+    );
     MemorySummarizer? memorySummarizer;
     PreferenceAggregator? preferenceAggregator;
     if (config.runtime.memorySummaryEnabled &&
@@ -603,9 +661,13 @@ class KernelService {
       opentoolDaemonPort: config.runtime.opentoolDaemonPort,
       embeddingsBaseUrl: config.embeddings.baseUrl,
       modelProfiler: modelProfiler,
+      cronModule: cronModule,
+      cronDaemonAccess: cronDaemonAccess,
+      cronLlmConfigAccess: cronLlmConfigAccess,
     );
     service._memorySummarizer = memorySummarizer;
     service._preferenceAggregator = preferenceAggregator;
+    await cronModule.start();
     return service;
   }
 
@@ -722,8 +784,22 @@ class KernelService {
     }
     _opentoolDaemonHost = normalizedHost;
     _opentoolDaemonPort = port;
+    _cronDaemonAccess?.host = normalizedHost;
+    _cronDaemonAccess?.port = port;
     _restartExternalServiceMonitoring();
     unawaited(_restartOpenToolDaemonPresetSync());
+  }
+
+  void setCronOpenToolDaemonApiKey(String daemonApiKey) {
+    final normalized = daemonApiKey.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError('daemonApiKey is required.');
+    }
+    _cronDaemonAccess?.daemonApiKey = normalized;
+  }
+
+  void clearCronOpenToolDaemonApiKey() {
+    _cronDaemonAccess?.daemonApiKey = null;
   }
 
   Future<void> startOpenToolDaemonPresetSync({
@@ -795,6 +871,7 @@ class KernelService {
     } else {
       pool.updateFromModels(models);
     }
+    _cronLlmConfigAccess?.pool = pool;
     final supervision = _kernel.supervision;
     if (supervision is AdaptiveSupervision) {
       supervision.updateModelCatalog(models);
@@ -1369,6 +1446,173 @@ class KernelService {
   // Job snapshots are intentionally not exposed. Use confirmation callbacks
   // for user-gated actions instead of polling job status.
 
+  Future<CronTaskDto> createCronTask({
+    required String name,
+    required String schedule,
+    required AgentCronSpecDto spec,
+    String source = KernelSources.api,
+    String? userId,
+    String? sessionId,
+    String? timezone,
+    CronTaskConcurrencyDto concurrency = CronTaskConcurrencyDto.skipIfRunning,
+    bool enabled = true,
+  }) async {
+    final module = _requireCronModule();
+    final task = await module.createTask(
+      name: name,
+      schedule: schedule,
+      spec: _toCronSpec(spec),
+      source: source,
+      userId: userId,
+      sessionId: sessionId,
+      timezone: timezone,
+      concurrency: _toCronConcurrency(concurrency),
+      enabled: enabled,
+    );
+    return _toCronTaskDto(task);
+  }
+
+  Future<CronTaskDto> updateCronTask({
+    required String cronId,
+    String? name,
+    String? schedule,
+    AgentCronSpecDto? spec,
+    String? timezone,
+    CronTaskConcurrencyDto? concurrency,
+    bool? enabled,
+  }) async {
+    final module = _requireCronModule();
+    final task = await module.updateTask(
+      cronId: cronId,
+      name: name,
+      schedule: schedule,
+      spec: spec == null ? null : _toCronSpec(spec),
+      timezone: timezone,
+      concurrency: concurrency == null ? null : _toCronConcurrency(concurrency),
+      enabled: enabled,
+    );
+    return _toCronTaskDto(task);
+  }
+
+  Future<void> deleteCronTask(String cronId) {
+    return _requireCronModule().deleteTask(cronId);
+  }
+
+  Future<CronTaskDto> getCronTask(String cronId) async {
+    final task = await _requireCronModule().getTask(cronId);
+    if (task == null) {
+      throw StateError('Unknown cronId: $cronId');
+    }
+    return _toCronTaskDto(task);
+  }
+
+  Future<List<CronTaskListItemDto>> listCronTasks({
+    bool? enabled,
+    String? source,
+    int offset = 0,
+    int limit = 50,
+  }) async {
+    final tasks = await _requireCronModule().listTasks(
+      enabled: enabled,
+      source: source,
+    );
+    return tasks
+        .skip(offset)
+        .take(limit)
+        .map(_toCronTaskListItemDto)
+        .toList(growable: false);
+  }
+
+  Future<CronTaskDto> pauseCronTask(String cronId) async {
+    return _toCronTaskDto(await _requireCronModule().pauseTask(cronId));
+  }
+
+  Future<CronTaskDto> resumeCronTask(String cronId) async {
+    return _toCronTaskDto(await _requireCronModule().resumeTask(cronId));
+  }
+
+  Future<CronRunDto> runCronTaskNow(
+    String cronId, {
+    DateTime? scheduledAt,
+  }) async {
+    final run = await _requireCronModule().runTaskNow(
+      cronId,
+      scheduledAt: scheduledAt,
+    );
+    return _toCronRunDto(run);
+  }
+
+  Future<CronRunDto> getCronRun(String runId) async {
+    final run = await _requireCronModule().getRun(runId);
+    if (run == null) {
+      throw StateError('Unknown cron runId: $runId');
+    }
+    return _toCronRunDto(run);
+  }
+
+  Future<void> deleteCronRun(String runId) {
+    return _requireCronModule().deleteRun(runId);
+  }
+
+  Future<List<CronRunListItemDto>> listCronRuns({
+    String? cronId,
+    DateTime? after,
+    DateTime? before,
+    int offset = 0,
+    int limit = 50,
+    bool includeNonDisplayable = false,
+  }) async {
+    final runs = await _requireCronModule().listRuns(cronId: cronId);
+    final filtered = runs.where((run) {
+      if (!includeNonDisplayable && !run.hasDisplayableResult) {
+        return false;
+      }
+      if (after != null && !run.startedAt.isAfter(after)) {
+        return false;
+      }
+      if (before != null && run.startedAt.isAfter(before)) {
+        return false;
+      }
+      return true;
+    });
+    return filtered
+        .skip(offset)
+        .take(limit)
+        .map(_toCronRunListItemDto)
+        .toList(growable: false);
+  }
+
+  Future<List<CronRunMessageDto>> listCronRunMessages(
+    String runId, {
+    int offset = 0,
+    int limit = 200,
+  }) async {
+    final messages = await _requireCronModule().listRunMessages(runId);
+    return messages
+        .skip(offset)
+        .take(limit)
+        .map(_toCronRunMessageDto)
+        .toList(growable: false);
+  }
+
+  Future<CronSchedulerSnapshotDto> getCronSchedulerSnapshot() async {
+    final snapshot = await _requireCronModule().snapshot();
+    return CronSchedulerSnapshotDto(
+      running: snapshot.running,
+      activeTaskCount: snapshot.activeTaskCount,
+      runningTaskCount: snapshot.runningTaskCount,
+      lastTickAt: snapshot.lastTickAt,
+    );
+  }
+
+  void startCronScheduler() {
+    unawaited(_requireCronModule().start());
+  }
+
+  Future<void> stopCronScheduler() {
+    return _requireCronModule().stop();
+  }
+
   /// Register a local OpenTool handler (callback tool).
   ///
   /// [tool] is the local OpenTool Tool implementation.
@@ -1453,21 +1697,14 @@ class KernelService {
     return const [];
   }
 
-  Future<List<PreferenceSignal>> listPreferenceSignals({
-    String? userId,
-  }) {
-    return _kernel.preference.listSignals(
-      userId: userId ?? _defaultUserId,
-    );
+  Future<List<PreferenceSignal>> listPreferenceSignals({String? userId}) {
+    return _kernel.preference.listSignals(userId: userId ?? _defaultUserId);
   }
 
-  Future<MemoryRecord?> triggerMemorySummarization({
-    String? scope,
-  }) async {
+  Future<MemoryRecord?> triggerMemorySummarization({String? scope}) async {
     final summarizer = _memorySummarizer;
     if (summarizer == null) return null;
-    final targetScope = scope ??
-        (await listMemoryScopes()).firstOrNull;
+    final targetScope = scope ?? (await listMemoryScopes()).firstOrNull;
     if (targetScope == null) return null;
     return summarizer.summarizeScope(scope: targetScope);
   }
@@ -1480,10 +1717,7 @@ class KernelService {
     return aggregator.aggregateUser(userId: userId ?? _defaultUserId);
   }
 
-  Future<void> deleteAllMemoryRecords({
-    String? type,
-    String? scope,
-  }) {
+  Future<void> deleteAllMemoryRecords({String? type, String? scope}) {
     return _kernel.memory.deleteAllRecords(scope: scope, type: type);
   }
 
@@ -1715,7 +1949,16 @@ class KernelService {
     if (content == null || content.isEmpty) {
       return null;
     }
-    return content.map((item) => item.message).join('\n');
+    return content
+        .map((item) {
+          final json = item.toJson();
+          final type = json['type'];
+          if (type is String && type.toLowerCase() == 'image') {
+            return '[image]';
+          }
+          return item.message;
+        })
+        .join('\n');
   }
 
   MemoryRecord _buildExternalAgentMessageRecord({
@@ -1789,6 +2032,143 @@ class KernelService {
       }
     }
     return 'Memory summary';
+  }
+
+  CronModule _requireCronModule() {
+    final module = _cronModule;
+    if (module == null) {
+      throw StateError('Cron module is not configured.');
+    }
+    return module;
+  }
+
+  AgentCronSpec _toCronSpec(AgentCronSpecDto dto) {
+    return AgentCronSpec(
+      systemPrompt: dto.systemPrompt,
+      content: dto.content,
+      timeoutSeconds: dto.timeoutSeconds,
+      llmConfig: dto.llmConfig,
+    );
+  }
+
+  AgentCronSpecDto _toCronSpecDto(AgentCronSpec spec) {
+    return AgentCronSpecDto(
+      systemPrompt: spec.systemPrompt,
+      content: spec.content,
+      timeoutSeconds: spec.timeoutSeconds,
+      llmConfig: spec.llmConfig,
+    );
+  }
+
+  CronTaskConcurrencyPolicy _toCronConcurrency(CronTaskConcurrencyDto value) {
+    switch (value) {
+      case CronTaskConcurrencyDto.allow:
+        return CronTaskConcurrencyPolicy.allow;
+      case CronTaskConcurrencyDto.replace:
+        return CronTaskConcurrencyPolicy.replace;
+      case CronTaskConcurrencyDto.skipIfRunning:
+        return CronTaskConcurrencyPolicy.skipIfRunning;
+    }
+  }
+
+  CronTaskConcurrencyDto _toCronConcurrencyDto(
+    CronTaskConcurrencyPolicy value,
+  ) {
+    switch (value) {
+      case CronTaskConcurrencyPolicy.allow:
+        return CronTaskConcurrencyDto.allow;
+      case CronTaskConcurrencyPolicy.replace:
+        return CronTaskConcurrencyDto.replace;
+      case CronTaskConcurrencyPolicy.skipIfRunning:
+        return CronTaskConcurrencyDto.skipIfRunning;
+    }
+  }
+
+  CronTaskDto _toCronTaskDto(CronTaskDefinition task) {
+    return CronTaskDto(
+      cronId: task.cronId,
+      name: task.name,
+      schedule: task.schedule,
+      source: task.source,
+      userId: task.userId,
+      sessionId: task.sessionId,
+      timezone: task.timezone,
+      enabled: task.enabled,
+      status: task.status.name,
+      concurrency: _toCronConcurrencyDto(task.concurrency),
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      lastRunAt: task.lastRunAt,
+      nextRunAt: task.nextRunAt,
+      spec: _toCronSpecDto(task.spec),
+    );
+  }
+
+  CronTaskListItemDto _toCronTaskListItemDto(CronTaskDefinition task) {
+    return CronTaskListItemDto(
+      cronId: task.cronId,
+      name: task.name,
+      schedule: task.schedule,
+      enabled: task.enabled,
+      status: task.status.name,
+      lastRunAt: task.lastRunAt,
+      nextRunAt: task.nextRunAt,
+    );
+  }
+
+  CronRunDto _toCronRunDto(CronRunRecord run) {
+    return CronRunDto(
+      runId: run.runId,
+      cronId: run.cronId,
+      trigger: run.trigger.name,
+      status: run.status.name,
+      scheduledAt: run.scheduledAt,
+      startedAt: run.startedAt,
+      hasDisplayableResult: run.hasDisplayableResult,
+      finishedAt: run.finishedAt,
+      liteAgentSessionId: run.liteAgentSessionId,
+      error: run.error,
+      result: run.result,
+      displayMessageId: run.displayMessageId,
+      displayText: run.displayText,
+    );
+  }
+
+  CronRunListItemDto _toCronRunListItemDto(CronRunRecord run) {
+    return CronRunListItemDto(
+      runId: run.runId,
+      cronId: run.cronId,
+      trigger: run.trigger.name,
+      status: run.status.name,
+      scheduledAt: run.scheduledAt,
+      startedAt: run.startedAt,
+      hasDisplayableResult: run.hasDisplayableResult,
+      finishedAt: run.finishedAt,
+      displayText: run.displayText,
+    );
+  }
+
+  CronRunMessageDto _toCronRunMessageDto(CronRunMessageRecord message) {
+    return CronRunMessageDto(
+      messageId: message.messageId,
+      runId: message.runId,
+      cronId: message.cronId,
+      timestamp: message.timestamp,
+      message: message.message,
+    );
+  }
+
+  static OpenSpec _daemonToolToOpenSpec(
+    ToolWithApiKeyDto toolInfo,
+    OpenTool spec,
+  ) {
+    final serverUrl = 'http://${toolInfo.host}:${toolInfo.port}';
+    return OpenSpec(
+      openSpec: jsonEncode(spec.toJson()),
+      protocol: Protocol.opentool,
+      serverUrl: serverUrl,
+      apiKey: ApiKey(type: ApiKeyType.original, apiKey: toolInfo.apiKey),
+    );
   }
 
   String _preferenceItemText(String key, Object? value) {

@@ -7,6 +7,7 @@ import '../agent/config.dart';
 import '../agent/llm_queue.dart';
 import '../agent/liteagent_client.dart';
 import '../agent/model.dart';
+import '../content/content_normalizer.dart';
 import '../logging/logger.dart';
 import 'drift_memory.dart';
 import 'model.dart';
@@ -107,10 +108,14 @@ class MemorySummarizer {
     );
     MemoryRecord? summaryRecord;
     if (records.length >= minRecords) {
+      final effectiveConfig = normalizeLlmConfigForLiteAgent(
+        llmConfigResolver?.call() ?? llmConfig,
+      );
       final prompt = _buildSummaryPrompt(
         records: records,
         scope: scope,
         userId: userId,
+        llmConfig: effectiveConfig,
       );
       final response = await _runLlm(
         purpose: 'memory_summary',
@@ -181,12 +186,16 @@ class MemorySummarizer {
       );
       return;
     }
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(
+      llmConfigResolver?.call() ?? llmConfig,
+    );
     final prompt = _buildSummaryAggregationPrompt(
       label: 'recent summaries',
       summaries: recentSummaries,
       scope: scope,
       userId: userId,
       priorMemory: null,
+      llmConfig: effectiveConfig,
     );
     final response = await _runLlm(
       purpose: 'short_term_memory',
@@ -239,12 +248,16 @@ class MemorySummarizer {
     if (promotedSummaries.isEmpty) {
       return;
     }
+    final effectiveConfig = normalizeLlmConfigForLiteAgent(
+      llmConfigResolver?.call() ?? llmConfig,
+    );
     final prompt = _buildSummaryAggregationPrompt(
       label: 'older summaries',
       summaries: promotedSummaries,
       scope: scope,
       userId: userId,
       priorMemory: previous?.data,
+      llmConfig: effectiveConfig,
     );
     final response = await _runLlm(
       purpose: 'long_term_memory',
@@ -279,6 +292,7 @@ class MemorySummarizer {
     required List<MemoryRecord> records,
     required String scope,
     String? userId,
+    required LLMConfig llmConfig,
   }) {
     final buffer = StringBuffer();
     buffer.writeln('Summarize these memory records for future planning.');
@@ -291,7 +305,7 @@ class MemorySummarizer {
       buffer.writeln(
         jsonEncode({
           'type': record.type,
-          'data': record.data,
+          'data': normalizeStructuredDataForModel(record.data, llmConfig),
           'timestamp': record.timestamp.toIso8601String(),
         }),
       );
@@ -305,6 +319,7 @@ class MemorySummarizer {
     required String scope,
     String? userId,
     Map<String, dynamic>? priorMemory,
+    required LLMConfig llmConfig,
   }) {
     final buffer = StringBuffer();
     buffer.writeln('Scope: $scope');
@@ -312,7 +327,9 @@ class MemorySummarizer {
       buffer.writeln('User: $userId');
     }
     if (priorMemory != null && priorMemory.isNotEmpty) {
-      buffer.writeln('Previous memory: ${jsonEncode(priorMemory)}');
+      buffer.writeln(
+        'Previous memory: ${jsonEncode(normalizeStructuredDataForModel(priorMemory, llmConfig))}',
+      );
     }
     buffer.writeln('Aggregate these $label into a compact memory state.');
     buffer.writeln('Summaries (JSON lines):');
@@ -320,7 +337,7 @@ class MemorySummarizer {
       buffer.writeln(
         jsonEncode({
           'timestamp': summary.timestamp.toIso8601String(),
-          'data': summary.data,
+          'data': normalizeStructuredDataForModel(summary.data, llmConfig),
         }),
       );
     }

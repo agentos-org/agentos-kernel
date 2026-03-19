@@ -8,6 +8,7 @@ import '../agent/config.dart';
 import '../agent/llm_queue.dart';
 import '../agent/liteagent_client.dart';
 import '../agent/model.dart';
+import '../content/content_normalizer.dart';
 import 'input.dart';
 import 'model.dart';
 import 'perception.dart';
@@ -33,13 +34,13 @@ class LiteAgentPerception implements Perception {
 
   @override
   Future<Percept> process(RawInput input) async {
-    final prompt = _buildPrompt(input);
     try {
       final baseConfig = llmConfigResolver?.call() ?? llmConfig;
       final override = _overrideConfig(input, baseConfig);
       final effectiveConfig = normalizeLlmConfigForLiteAgent(
         override ?? baseConfig,
       );
+      final prompt = _buildPrompt(input, effectiveConfig);
       final modelKey = buildLlmModelKey(
         baseUrl: effectiveConfig.baseUrl,
         model: effectiveConfig.model,
@@ -111,14 +112,16 @@ class LiteAgentPerception implements Perception {
     );
   }
 
-  String _buildPrompt(RawInput input) {
+  String _buildPrompt(RawInput input, LLMConfig llmConfig) {
     final buffer = StringBuffer();
     buffer.writeln('User input:');
     if (input.text != null) {
       buffer.writeln(input.text);
     }
     if (input.data != null && input.data!.isNotEmpty) {
-      buffer.writeln('Structured data: ${jsonEncode(input.data)}');
+      buffer.writeln(
+        'Structured data: ${jsonEncode(normalizeStructuredDataForModel(input.data, llmConfig))}',
+      );
     }
     if (actionHints != null && actionHints!.isNotEmpty) {
       buffer.writeln('Allowed actions: ${actionHints!.join(', ')}');

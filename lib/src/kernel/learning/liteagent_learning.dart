@@ -8,6 +8,7 @@ import '../agent/config.dart';
 import '../agent/llm_queue.dart';
 import '../agent/liteagent_client.dart';
 import '../agent/model.dart';
+import '../content/content_normalizer.dart';
 import '../preference/model.dart';
 import '../preference/preference.dart';
 import 'learning.dart';
@@ -43,7 +44,7 @@ class LiteAgentLearning implements Learning {
       model: effectiveConfig.model,
       apiKey: effectiveConfig.apiKey,
     );
-    final prompt = _buildPrompt(record);
+    final taskContent = _buildTaskContent(record, effectiveConfig);
     try {
       final signal = await llmQueue.enqueue(
         purpose: 'learning',
@@ -61,10 +62,7 @@ class LiteAgentLearning implements Learning {
             ),
           );
           final session = await sdk.initSession(capability: capability);
-          final task = UserTask(
-            content: [Content(type: ContentType.text, message: prompt)],
-            isChunk: true,
-          );
+          final task = UserTask(content: taskContent, isChunk: true);
           final completer = Completer<PreferenceSignal?>();
           final handler = _LearningToolHandler(
             record: record,
@@ -94,16 +92,42 @@ class LiteAgentLearning implements Learning {
     }
   }
 
-  String _buildPrompt(LearningRecord record) {
-    final buffer = StringBuffer();
-    buffer.writeln('You extract user preference signals.');
-    buffer.writeln('Call emit_preference with text/metadata.');
-    buffer.writeln('If no preference signal, call reject_preference.');
-    buffer.writeln('Event type: ${record.type}');
-    if (record.data != null) {
-      buffer.writeln('Event data: ${jsonEncode(record.data)}');
+  List<Content> _buildTaskContent(LearningRecord record, LLMConfig llmConfig) {
+    final normalizedData = normalizeStructuredDataForModel(
+      record.data,
+      llmConfig,
+    );
+    final content = contentFromStructuredData(record.data, llmConfig);
+    final extraData = omitStructuredContent(normalizedData);
+    final intro = StringBuffer();
+    intro.writeln('You extract user preference signals.');
+    intro.writeln('Call emit_preference with text/metadata.');
+    intro.writeln('If no preference signal, call reject_preference.');
+    intro.writeln('Event type: ${record.type}');
+    final taskContent = <Content>[
+      Content(type: ContentType.text, message: intro.toString()),
+    ];
+    if (content.isNotEmpty) {
+      taskContent.addAll(content);
     }
-    return buffer.toString();
+    if (extraData != null && extraData.isNotEmpty) {
+      taskContent.add(
+        Content(
+          type: ContentType.text,
+          message: 'Event data: ${jsonEncode(extraData)}',
+        ),
+      );
+    } else if (content.isEmpty &&
+        normalizedData != null &&
+        normalizedData.isNotEmpty) {
+      taskContent.add(
+        Content(
+          type: ContentType.text,
+          message: 'Event data: ${jsonEncode(normalizedData)}',
+        ),
+      );
+    }
+    return taskContent;
   }
 
   String _learningToolSpecJson() {
@@ -129,10 +153,7 @@ class LiteAgentLearning implements Learning {
               'name': 'metadata',
               'description': 'Optional metadata payload.',
               'required': false,
-              'schema': {
-                'type': 'object',
-                'properties': {},
-              },
+              'schema': {'type': 'object', 'properties': {}},
             },
           ],
         },

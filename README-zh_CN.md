@@ -39,6 +39,19 @@ dart run example/service_example.dart
   - 将外部 LLM 性能指标上报给 supervision。
 - `ingestAgentMessageForLearning({userId, bundleId, agentMessage})`
   - 将外部 `AgentMessage` 写入 memory，并继续送入偏好学习流程。
+- 定时任务：
+  - `createCronTask({name, schedule, spec, source, userId, sessionId, timezone, concurrency, enabled})` → `Future<CronTaskDto>`
+  - `updateCronTask({cronId, name, schedule, spec, timezone, concurrency, enabled})` → `Future<CronTaskDto>`
+  - `deleteCronTask(cronId)` → `Future<void>`
+  - `getCronTask(cronId)` → `Future<CronTaskDto>`
+  - `listCronTasks({enabled, source, offset, limit})` → `Future<List<CronTaskListItemDto>>`
+  - `pauseCronTask(cronId)` / `resumeCronTask(cronId)` → `Future<CronTaskDto>`
+  - `runCronTaskNow(cronId, {scheduledAt})` → `Future<CronRunDto>`
+  - `getCronRun(runId)` → `Future<CronRunDto>`
+  - `listCronRuns({cronId, after, before, offset, limit})` → `Future<List<CronRunListItemDto>>`
+  - `listCronRunMessages(runId, {offset, limit})` → `Future<List<CronRunMessageDto>>`
+  - `getCronSchedulerSnapshot()` → `Future<CronSchedulerSnapshotDto>`
+  - `startCronScheduler()` / `stopCronScheduler()` → `Future<void>`
 
 已弃用运行时 API：
 - `recordAgentMessage({userId, bundleId, agentMessage})`
@@ -147,6 +160,8 @@ Adaptive supervision 会轮询外部服务：
 - 规划（Planning）：基于意图候选与可用工具选择下一步动作，使用 LiteAgent + LLM（不直接持久化）。
   该模块已弃用，当前仅为兼容旧意图流而保留。
 - 执行（Execution）：执行已选意图，通常通过 OpenTool；产生工具调用事件；工具调用记录可通过 Drift 持久化（可选）。
+- 定时（Cron）：负责定时调度任务，并通过 LiteAgent SDK 把任务提交为 LiteAgent Auto Multi-Agent 会话执行。
+  当前实现的任务存储和运行记录为内存态。
 - 记忆（Memory）：长期记录存取（Drift/SQLite3），较早记录可通过 LiteAgent 摘要成 `MEMORY_SUMMARY`，
   规划时同时使用摘要与近期细节作为上下文。偏好学习默认在 LLM 空闲时延迟执行。
 - 偏好（Preference）：偏好信号存储（Hive）+ 向量检索（LiteEmbeddings），用于感知阶段的偏好 enrich。
@@ -169,6 +184,75 @@ Adaptive supervision 会轮询外部服务：
 - SQLite3（Drift，记忆）：`DriftMemory` 持久化记忆记录；可通过 `KernelRuntimeConfig.memoryDbPath` 修改 SQLite 路径。
 - SQLite3（可选，Drift）：`DriftToolCallStore` 持久化工具调用记录，仅在启用时使用，独立于主流程存储。
 - 向量库（LiteEmbeddings）：用于存储与检索偏好 embedding；在感知阶段的偏好检索/enrich 时使用。
+- 定时任务/运行记录：当前仅内存态，不会在进程重启后恢复。
+
+## 定时任务
+
+当宿主应用需要按 cron 表达式定时执行 LiteAgent Auto Multi-Agent 任务时，可使用定时任务接口。
+
+每个定时任务包含：
+- 一个 cron 表达式，例如 `0 */1 * * *`
+- 一组 service 级别的 `source / userId / sessionId`
+- 一个 `AgentCronSpecDto`，内部会映射为 LiteAgent 的 `Capability + UserTask`
+
+`AgentCronSpecDto` 关键字段：
+- `systemPrompt`：LiteAgent 根系统提示词
+- `content`：LiteAgent 的 `UserTask.content`，可直接支持文字和图片输入
+- `timeoutSeconds`：单次任务最长执行时间
+
+模型选择：
+- 定时任务不接受外部传入的 `llmConfig` 或 `llmConfigList`。
+- 执行时会从 kernel 当前可用的大模型列表中解析并选择模型。
+- cron 执行固定走 Auto Multi-Agent，`auto` 不对外暴露。
+- 定时任务不接受外部传入的 `openSpecList` 或 `callbackOpenTool`。
+- 工具能力会在每次执行时动态从 OpenTool daemon 拉取。
+- 若 cron 任务需要 daemon 工具，请先调用 `setCronOpenToolDaemonApiKey(...)`。
+
+最小示例：
+
+```dart
+final service = await KernelService.create(
+  KernelServiceConfig(
+    liteAgentSdk: LiteAgentSDK(
+      baseUrl: '<LITEAGENT_BASE_URL>',
+      apiKey: '<LITEAGENT_API_KEY>',
+    ),
+    embeddings: const EmbeddingsConfig(
+      baseUrl: '<LITE_EMBEDDINGS_BASE_URL>',
+      docsName: 'kernel',
+    ),
+  ),
+);
+
+final task = await service.createCronTask(
+  name: 'Nightly CRM Sync',
+  schedule: '0 2 * * *',
+  source: KernelSources.api,
+  spec: AgentCronSpecDto(
+    systemPrompt: 'You are an Auto Multi-Agent operator.',
+    content: const [
+      Content(
+        type: ContentType.text,
+        message: 'Sync CRM records and summarize failures.',
+      ),
+    ],
+  ),
+);
+
+service.startCronScheduler();
+
+final run = await service.runCronTaskNow(task.cronId);
+print(run.status);
+```
+
+当前行为与限制：
+- 定时执行直接走 LiteAgent SDK 会话，不经过已弃用的 kernel planning 流程。
+- 大模型选择来自 kernel 当前可用模型列表，而不是单任务输入。
+- cron 工具可用性会在每次 run 时动态从 OpenTool daemon 解析。
+- 每次触发都会新建一个 LiteAgent session。
+- 默认并发策略是 `skipIfRunning`。
+- `replace` 暂未实现，当前会记录为 cancelled run。
+- 单次运行结果取自最后一条收到的 LiteAgent message。
 
 ## 示例配置
 
