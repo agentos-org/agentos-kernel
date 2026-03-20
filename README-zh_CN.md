@@ -206,7 +206,6 @@ Adaptive supervision 会轮询外部服务：
 - cron 执行固定走 Auto Multi-Agent，`auto` 不对外暴露。
 - 定时任务不接受外部传入的 `openSpecList` 或 `callbackOpenTool`。
 - 工具能力会在每次执行时动态从 OpenTool daemon 拉取。
-- 若 cron 任务需要 daemon 工具，请先调用 `setCronOpenToolDaemonApiKey(...)`。
 
 最小示例：
 

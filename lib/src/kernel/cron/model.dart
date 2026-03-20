@@ -25,11 +25,13 @@ class AgentCronSpec {
     required LLMConfig llmConfig,
     List<LLMConfig>? llmConfigList,
     List<OpenSpec>? openSpecList,
+    CallbackOpenTool? callbackOpenTool,
   }) {
     return Capability(
       llmConfig: llmConfig,
       systemPrompt: systemPrompt,
       openSpecList: openSpecList,
+      callbackOpenTool: callbackOpenTool,
       timeoutSeconds: timeoutSeconds,
       taskPipelineStrategy: PipelineStrategyType.parallel,
       toolPipelineStrategy: PipelineStrategyType.parallel,

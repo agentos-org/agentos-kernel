@@ -210,7 +210,6 @@ Model selection:
 - Auto mode is always enabled for cron execution.
 - Cron tasks do not accept external `openSpecList` or `callbackOpenTool`.
 - Tool availability is loaded dynamically from OpenTool daemon at run time.
-- Call `setCronOpenToolDaemonApiKey(...)` before running cron tasks that need daemon tools.
 
 Minimal example:
 

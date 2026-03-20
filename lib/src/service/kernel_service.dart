@@ -563,7 +563,6 @@ class KernelService {
       host: config.runtime.opentoolDaemonHost,
       port: config.runtime.opentoolDaemonPort,
       logger: logger,
-      mapToOpenSpec: KernelService._daemonToolToOpenSpec,
     );
     final cronLlmConfigAccess = CronLlmConfigAccess(
       pool: llmConfigPool,
@@ -585,7 +584,9 @@ class KernelService {
         logger: logger,
         llmConfigResolver: cronLlmConfigAccess.resolve,
         llmConfigListResolver: cronLlmConfigAccess.resolveAll,
-        daemonOpenSpecResolver: cronDaemonAccess.resolveOpenSpecs,
+        daemonToolCatalogResolver: cronDaemonAccess.resolveCatalog,
+        daemonHost: config.runtime.opentoolDaemonHost,
+        daemonPort: config.runtime.opentoolDaemonPort,
       ),
     );
     MemorySummarizer? memorySummarizer;
@@ -790,31 +791,20 @@ class KernelService {
     unawaited(_restartOpenToolDaemonPresetSync());
   }
 
-  void setCronOpenToolDaemonApiKey(String daemonApiKey) {
-    final normalized = daemonApiKey.trim();
-    if (normalized.isEmpty) {
-      throw ArgumentError('daemonApiKey is required.');
-    }
-    _cronDaemonAccess?.daemonApiKey = normalized;
-  }
-
-  void clearCronOpenToolDaemonApiKey() {
-    _cronDaemonAccess?.daemonApiKey = null;
-  }
-
   Future<void> startOpenToolDaemonPresetSync({
     required String daemonApiKey,
     Duration debounce = const Duration(milliseconds: 200),
     DaemonPresetFilter? presetFilter,
   }) async {
-    if (daemonApiKey.trim().isEmpty) {
+    final normalizedDaemonApiKey = daemonApiKey.trim();
+    if (normalizedDaemonApiKey.isEmpty) {
       throw ArgumentError('daemonApiKey is required.');
     }
     final liteAgentClient = _liteAgentClient;
     if (liteAgentClient == null) {
       throw StateError('LiteAgent client is not managed by KernelService.');
     }
-    _openToolDaemonSyncApiKey = daemonApiKey.trim();
+    _openToolDaemonSyncApiKey = normalizedDaemonApiKey;
     _openToolDaemonSyncDebounce = debounce;
     _openToolDaemonPresetFilter = presetFilter;
     final existing = _openToolDaemonPresetSync;
@@ -2155,19 +2145,6 @@ class KernelService {
       cronId: message.cronId,
       timestamp: message.timestamp,
       message: message.message,
-    );
-  }
-
-  static OpenSpec _daemonToolToOpenSpec(
-    ToolWithApiKeyDto toolInfo,
-    OpenTool spec,
-  ) {
-    final serverUrl = 'http://${toolInfo.host}:${toolInfo.port}';
-    return OpenSpec(
-      openSpec: jsonEncode(spec.toJson()),
-      protocol: Protocol.opentool,
-      serverUrl: serverUrl,
-      apiKey: ApiKey(type: ApiKeyType.original, apiKey: toolInfo.apiKey),
     );
   }
 

@@ -1,8 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:agentos_kernel/src/kernel/cron/daemon_open_spec_provider.dart';
 import 'package:agentos_kernel/src/kernel/cron/liteagent_executor.dart';
 import 'package:agentos_kernel/src/kernel/cron/model.dart';
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
+import 'package:opentool_daemon/opentool_daemon_client.dart';
+import 'package:opentool_dart/opentool_client.dart' as ot;
+import 'package:opentool_dart/opentool_schema.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -117,6 +122,95 @@ void main() {
       expect(overrideConfig.contextWindowSize, 128000);
       expect(sdk.lastCapability!.llmConfigList, hasLength(1));
       expect(sdk.lastCapability!.llmConfigList!.single.model, 'override-model');
+    });
+
+    test('executor debug prints callback tool catalog', () async {
+      final sdk = _RecordingLiteAgentSdk(
+        sessionId: 'debug-session',
+        responseText: 'debug-response',
+      );
+      final executor = LiteAgentCronExecutor(
+        sdk: sdk,
+        llmConfigResolver: () => LLMConfig(
+          baseUrl: 'http://127.0.0.1:9000',
+          apiKey: 'test-key',
+          model: 'qwen-test',
+        ),
+        llmConfigListResolver: () => const <LLMConfig>[],
+        daemonToolCatalogResolver: () async => [
+          CronDaemonToolCatalogItem(
+            toolId: 'tool-a',
+            alias: 'search',
+            status: 'running',
+            spec: OpenTool(
+              opentool: '1.1.0',
+              info: Info(
+                title: 'Tool A',
+                description: 'Search tool',
+                version: '1.0.0',
+              ),
+              functions: [
+                FunctionModel(
+                  name: 'search_news',
+                  description: 'Search news',
+                  parameters: const [],
+                ),
+              ],
+            ),
+          ),
+        ],
+        daemonClientFactory: (host, port) => _NoopDaemonClient(),
+      );
+      final task = CronTaskDefinition(
+        cronId: 'cron-debug',
+        name: 'debug-report',
+        schedule: '*/5 * * * *',
+        source: 'api',
+        concurrency: CronTaskConcurrencyPolicy.skipIfRunning,
+        spec: AgentCronSpec(
+          systemPrompt: 'You are a cron agent.',
+          content: [
+            Content(type: ContentType.text, message: 'Generate debug output.'),
+          ],
+        ),
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+        status: CronTaskStatus.active,
+      );
+
+      final printed = <String>[];
+      await runZoned(
+        () async {
+          final result = await executor.run(task);
+          expect(result.success, isTrue);
+        },
+        zoneSpecification: ZoneSpecification(
+          print: (_, _, _, line) => printed.add(line),
+        ),
+      );
+
+      final capabilityLog = printed
+          .map((line) => jsonDecode(line) as Map<String, dynamic>)
+          .firstWhere(
+            (payload) =>
+                payload['tag'] == 'cron_executor_stage' &&
+                payload['stage'] == 'executor_capability_built',
+          );
+
+      final data = capabilityLog['data'] as Map<String, dynamic>;
+      final capability = data['capability'] as Map<String, dynamic>;
+      final callbackOpenTool =
+          capability['callbackOpenTool'] as Map<String, dynamic>;
+      final functions = callbackOpenTool['functions'] as List<dynamic>;
+      final firstFunction = functions.single as Map<String, dynamic>;
+
+      expect(callbackOpenTool['toolCount'], 1);
+      expect(functions, hasLength(1));
+      expect(firstFunction['toolId'], 'tool-a');
+      expect(firstFunction['alias'], 'search');
+      expect(firstFunction['functionName'], 'search_news');
+      expect(firstFunction['syntheticName'], 'daemon_tool-a__search_news');
+      expect(firstFunction['isStreaming'], isFalse);
     });
 
     test(
@@ -268,6 +362,75 @@ void main() {
         expect(sdk.getHistoryCalls, greaterThanOrEqualTo(2));
       },
     );
+
+    test(
+      'executor uses daemon call for non-stream functions even from stream callback',
+      () async {
+        final sdk = _StreamFunctionLiteAgentSdk(sessionId: 'stream-session');
+        final daemonClient = _RecordingModeAwareDaemonClient();
+        final executor = LiteAgentCronExecutor(
+          sdk: sdk,
+          llmConfigResolver: () => LLMConfig(
+            baseUrl: 'http://127.0.0.1:9000',
+            apiKey: 'test-key',
+            model: 'qwen-test',
+          ),
+          llmConfigListResolver: () => const <LLMConfig>[],
+          daemonToolCatalogResolver: () async => [
+            CronDaemonToolCatalogItem(
+              toolId: 'tool-a',
+              alias: 'search',
+              status: 'running',
+              spec: OpenTool(
+                opentool: '1.1.0',
+                info: Info(
+                  title: 'Tool A',
+                  description: 'Search tool',
+                  version: '1.0.0',
+                ),
+                functions: [
+                  FunctionModel(
+                    name: 'search_news',
+                    description: 'Search news',
+                    parameters: const [],
+                  ),
+                ],
+              ),
+            ),
+          ],
+          daemonClientFactory: (host, port) => daemonClient,
+        );
+        final task = CronTaskDefinition(
+          cronId: 'cron-stream',
+          name: 'stream-report',
+          schedule: '*/5 * * * *',
+          source: 'api',
+          concurrency: CronTaskConcurrencyPolicy.skipIfRunning,
+          spec: AgentCronSpec(
+            systemPrompt: 'You are a cron agent.',
+            timeoutSeconds: 1,
+            content: [
+              Content(type: ContentType.text, message: 'Run stream tool.'),
+            ],
+          ),
+          createdAt: DateTime(2026, 1, 1),
+          updatedAt: DateTime(2026, 1, 1),
+          status: CronTaskStatus.active,
+        );
+
+        final result = await executor.run(task);
+
+        expect(result.success, isTrue);
+        expect(daemonClient.callCount, 1);
+        expect(daemonClient.streamCallCount, 0);
+        expect(sdk.observedEvents, hasLength(1));
+        expect(sdk.observedEvents.single.eventType, ot.EventType.DONE);
+        expect(sdk.observedEvents.single.toolReturn.result, {
+          'status': 'ok',
+          'mode': 'call',
+        });
+      },
+    );
   });
 }
 
@@ -388,5 +551,82 @@ class _DelayedHistoryLiteAgentSdk extends LiteAgentSDK {
     final index = getHistoryCalls.clamp(0, historySnapshots.length - 1);
     getHistoryCalls += 1;
     return historySnapshots[index];
+  }
+}
+
+class _NoopDaemonClient extends DaemonClient {
+  _NoopDaemonClient() : super(host: '127.0.0.1', port: 19627);
+}
+
+class _StreamFunctionLiteAgentSdk extends LiteAgentSDK {
+  final String sessionId;
+  final List<EventToolReturn> observedEvents = <EventToolReturn>[];
+
+  _StreamFunctionLiteAgentSdk({required this.sessionId})
+    : super(baseUrl: 'http://127.0.0.1:65535');
+
+  @override
+  Future<Session> initSession({Capability? capability, String? agentId}) async {
+    return Session(sessionId: sessionId);
+  }
+
+  @override
+  Future<void> chat(
+    Session session,
+    UserTask userTask,
+    AgentMessageHandler agentMessageHandler,
+  ) async {
+    unawaited(
+      Future<void>(() async {
+        await agentMessageHandler.onStreamFunctionCall(
+          session.sessionId,
+          ot.FunctionCall(
+            id: 'call-1',
+            name: 'daemon_tool-a__search_news',
+            arguments: const {'query': 'latest AI news'},
+          ),
+          observedEvents.add,
+        );
+        if (observedEvents.isNotEmpty) {
+          await agentMessageHandler.onDone();
+        }
+      }),
+    );
+  }
+
+  @override
+  Future<List<AgentMessage>> getHistory(Session session) async => const [];
+}
+
+class _RecordingModeAwareDaemonClient extends DaemonClient {
+  int callCount = 0;
+  int streamCallCount = 0;
+
+  _RecordingModeAwareDaemonClient() : super(host: '127.0.0.1', port: 19627);
+
+  @override
+  Future<ot.ToolReturn> callTool(String toolId, ot.FunctionCall functionCall) async {
+    callCount += 1;
+    return ot.ToolReturn(
+      id: functionCall.id,
+      result: {'status': 'ok', 'mode': 'call'},
+    );
+  }
+
+  @override
+  Future<void> streamCallTool(
+    String toolId,
+    ot.FunctionCall functionCall, {
+    required void Function(String event, Map<String, dynamic> data) onEvent,
+    void Function(Object error, StackTrace stackTrace)? onError,
+  }) async {
+    streamCallCount += 1;
+    onEvent(
+      ot.EventType.DONE,
+      ot.ToolReturn(
+        id: functionCall.id,
+        result: {'status': 'ok', 'mode': 'stream'},
+      ).toJson(),
+    );
   }
 }

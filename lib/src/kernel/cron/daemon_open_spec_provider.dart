@@ -1,17 +1,13 @@
 import 'dart:async';
+import 'dart:convert';
 
-import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import 'package:opentool_daemon/opentool_daemon_client.dart';
 import 'package:opentool_dart/opentool_schema.dart';
 
 import '../logging/logger.dart';
 
 typedef CronDaemonToolListLoader =
-    Future<List<ToolWithApiKeyDto>> Function({
-      required String host,
-      required int port,
-      required String daemonApiKey,
-    });
+    Future<List<ToolDto>> Function({required String host, required int port});
 
 typedef CronDaemonToolSpecLoader =
     Future<OpenTool?> Function({
@@ -20,29 +16,49 @@ typedef CronDaemonToolSpecLoader =
       required String toolId,
     });
 
-typedef CronDaemonOpenSpecMapper =
-    OpenSpec Function(ToolWithApiKeyDto toolInfo, OpenTool spec);
+class CronDaemonToolCatalogItem {
+  final String toolId;
+  final String alias;
+  final String status;
+  final String? serverId;
+  final OpenTool spec;
+
+  const CronDaemonToolCatalogItem({
+    required this.toolId,
+    required this.alias,
+    required this.status,
+    required this.spec,
+    this.serverId,
+  });
+
+  Map<String, dynamic> toJson() {
+    return {
+      'toolId': toolId,
+      'alias': alias,
+      'status': status,
+      'serverId': serverId,
+      'spec': spec.toJson(),
+    };
+  }
+}
 
 class CronDaemonOpenSpecProvider {
   String host;
   int port;
-  String? daemonApiKey;
   final Duration cacheTtl;
   final KernelLogger? logger;
   final DateTime Function() _now;
   final CronDaemonToolListLoader _listTools;
   final CronDaemonToolSpecLoader _loadTool;
-  final CronDaemonOpenSpecMapper _mapToOpenSpec;
 
-  List<OpenSpec> _cachedOpenSpecs = const <OpenSpec>[];
+  List<CronDaemonToolCatalogItem> _cachedCatalog =
+      const <CronDaemonToolCatalogItem>[];
   DateTime? _cachedAt;
-  Future<List<OpenSpec>>? _inFlight;
+  Future<List<CronDaemonToolCatalogItem>>? _inFlight;
 
   CronDaemonOpenSpecProvider({
     required this.host,
     required this.port,
-    required CronDaemonOpenSpecMapper mapToOpenSpec,
-    this.daemonApiKey,
     this.cacheTtl = const Duration(seconds: 2),
     this.logger,
     DateTime Function()? now,
@@ -50,23 +66,25 @@ class CronDaemonOpenSpecProvider {
     CronDaemonToolSpecLoader? loadTool,
   }) : _now = now ?? DateTime.now,
        _listTools = listTools ?? _defaultListTools,
-       _loadTool = loadTool ?? _defaultLoadTool,
-       _mapToOpenSpec = mapToOpenSpec;
+       _loadTool = loadTool ?? _defaultLoadTool;
 
-  Future<List<OpenSpec>> resolveOpenSpecs() async {
-    final apiKey = daemonApiKey?.trim();
-    if (apiKey == null || apiKey.isEmpty) {
-      return const <OpenSpec>[];
-    }
+  Future<List<CronDaemonToolCatalogItem>> resolveCatalog() async {
     final cached = _resolveCached();
     if (cached != null) {
+      _debugPrint('resolve_cache_hit', {
+        'host': host,
+        'port': port,
+        'toolCount': cached.length,
+      });
       return cached;
     }
     final inFlight = _inFlight;
     if (inFlight != null) {
+      _debugPrint('resolve_join_inflight', {'host': host, 'port': port});
       return inFlight;
     }
-    final future = _refreshOpenSpecs(apiKey);
+    _debugPrint('resolve_refresh_start', {'host': host, 'port': port});
+    final future = _refreshCatalog();
     _inFlight = future;
     try {
       return await future;
@@ -77,7 +95,7 @@ class CronDaemonOpenSpecProvider {
     }
   }
 
-  List<OpenSpec>? _resolveCached() {
+  List<CronDaemonToolCatalogItem>? _resolveCached() {
     final cachedAt = _cachedAt;
     if (cachedAt == null) {
       return null;
@@ -85,19 +103,35 @@ class CronDaemonOpenSpecProvider {
     if (_now().difference(cachedAt) > cacheTtl) {
       return null;
     }
-    return List<OpenSpec>.unmodifiable(_cachedOpenSpecs);
+    return List<CronDaemonToolCatalogItem>.unmodifiable(_cachedCatalog);
   }
 
-  Future<List<OpenSpec>> _refreshOpenSpecs(String apiKey) async {
+  Future<List<CronDaemonToolCatalogItem>> _refreshCatalog() async {
     try {
-      final toolList = await _listTools(
-        host: host,
-        port: port,
-        daemonApiKey: apiKey,
-      );
-      final openSpecs = <OpenSpec>[];
+      final toolList = await _listTools(host: host, port: port);
+      _debugPrint('refresh_list_tools_done', {
+        'host': host,
+        'port': port,
+        'toolCount': toolList.length,
+        'tools': toolList
+            .map(
+              (tool) => {
+                'id': tool.id,
+                'alias': tool.alias,
+                'status': tool.status,
+                'serverId': tool.serverId,
+              },
+            )
+            .toList(growable: false),
+      });
+      final catalog = <CronDaemonToolCatalogItem>[];
       for (final toolInfo in toolList) {
         if (toolInfo.status != 'running') {
+          _debugPrint('refresh_skip_tool_not_running', {
+            'toolId': toolInfo.id,
+            'alias': toolInfo.alias,
+            'status': toolInfo.status,
+          });
           continue;
         }
         final spec = await _loadTool(
@@ -106,17 +140,44 @@ class CronDaemonOpenSpecProvider {
           toolId: toolInfo.id,
         );
         if (spec == null) {
+          _debugPrint('refresh_skip_tool_spec_missing', {
+            'toolId': toolInfo.id,
+            'alias': toolInfo.alias,
+          });
           continue;
         }
-        openSpecs.add(_mapToOpenSpec(toolInfo, spec));
+        _debugPrint('refresh_tool_spec_loaded', {
+          'toolId': toolInfo.id,
+          'alias': toolInfo.alias,
+        });
+        catalog.add(
+          CronDaemonToolCatalogItem(
+            toolId: toolInfo.id,
+            alias: toolInfo.alias,
+            status: toolInfo.status,
+            serverId: toolInfo.serverId,
+            spec: spec,
+          ),
+        );
       }
-      _cachedOpenSpecs = List<OpenSpec>.unmodifiable(openSpecs);
+      _cachedCatalog = List<CronDaemonToolCatalogItem>.unmodifiable(catalog);
       _cachedAt = _now();
-      return _cachedOpenSpecs;
+      _debugPrint('refresh_completed', {
+        'host': host,
+        'port': port,
+        'toolCount': _cachedCatalog.length,
+        'tools': _cachedCatalog.map((item) => item.toJson()).toList(),
+      });
+      return _cachedCatalog;
     } catch (error, stackTrace) {
+      _debugPrint('refresh_failed', {
+        'host': host,
+        'port': port,
+        'error': error.toString(),
+      });
       if (_cachedAt != null) {
         logger?.warn(
-          'Failed to refresh cron daemon OpenTool specs. Using cached specs.',
+          'Failed to refresh cron daemon tool catalog. Using cached tools.',
           data: {
             'host': host,
             'port': port,
@@ -124,19 +185,18 @@ class CronDaemonOpenSpecProvider {
             'stackTrace': stackTrace.toString(),
           },
         );
-        return List<OpenSpec>.unmodifiable(_cachedOpenSpecs);
+        return List<CronDaemonToolCatalogItem>.unmodifiable(_cachedCatalog);
       }
       rethrow;
     }
   }
 
-  static Future<List<ToolWithApiKeyDto>> _defaultListTools({
+  static Future<List<ToolDto>> _defaultListTools({
     required String host,
     required int port,
-    required String daemonApiKey,
   }) {
     final client = DaemonClient(host: host, port: port);
-    return client.listToolWithApiKeys('1', daemonApiKey: daemonApiKey);
+    return client.listTool('1');
   }
 
   static Future<OpenTool?> _defaultLoadTool({
@@ -146,5 +206,16 @@ class CronDaemonOpenSpecProvider {
   }) {
     final client = DaemonClient(host: host, port: port);
     return client.loadTool(toolId);
+  }
+
+  void _debugPrint(String stage, Map<String, dynamic> data) {
+    print(
+      jsonEncode({
+        'tag': 'cron_daemon_open_spec_provider',
+        'stage': stage,
+        'timestamp': DateTime.now().toIso8601String(),
+        'data': data,
+      }),
+    );
   }
 }
