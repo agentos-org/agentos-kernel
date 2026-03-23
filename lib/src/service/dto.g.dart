@@ -244,6 +244,9 @@ CronRunDto _$CronRunDtoFromJson(Map<String, dynamic> json) => CronRunDto(
   finishedAt: json['finishedAt'] == null
       ? null
       : DateTime.parse(json['finishedAt'] as String),
+  llmConfig: json['llmConfig'] == null
+      ? null
+      : LLMConfig.fromJson(json['llmConfig'] as Map<String, dynamic>),
   liteAgentSessionId: json['liteAgentSessionId'] as String?,
   error: json['error'] as String?,
   result: json['result'] as Map<String, dynamic>?,
@@ -269,6 +272,7 @@ Map<String, dynamic> _$CronRunDtoToJson(CronRunDto instance) {
   }
 
   writeNotNull('finishedAt', instance.finishedAt?.toIso8601String());
+  writeNotNull('llmConfig', instance.llmConfig?.toJson());
   writeNotNull('liteAgentSessionId', instance.liteAgentSessionId);
   writeNotNull('error', instance.error);
   writeNotNull('result', instance.result);
@@ -289,6 +293,9 @@ CronRunListItemDto _$CronRunListItemDtoFromJson(Map<String, dynamic> json) =>
       finishedAt: json['finishedAt'] == null
           ? null
           : DateTime.parse(json['finishedAt'] as String),
+      llmConfig: json['llmConfig'] == null
+          ? null
+          : LLMConfig.fromJson(json['llmConfig'] as Map<String, dynamic>),
       displayText: json['displayText'] as String?,
     );
 
@@ -310,6 +317,7 @@ Map<String, dynamic> _$CronRunListItemDtoToJson(CronRunListItemDto instance) {
   }
 
   writeNotNull('finishedAt', instance.finishedAt?.toIso8601String());
+  writeNotNull('llmConfig', instance.llmConfig?.toJson());
   writeNotNull('displayText', instance.displayText);
   return val;
 }

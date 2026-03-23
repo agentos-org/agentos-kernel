@@ -164,6 +164,7 @@ class CronModule {
       scheduledAt: scheduledAt ?? now,
       startedAt: now,
       status: CronRunStatus.running,
+      llmConfig: task.spec.llmConfig,
     );
     await _store.putRun(baseRun);
     print(
@@ -218,6 +219,7 @@ class CronModule {
         status: execution.success
             ? CronRunStatus.succeeded
             : CronRunStatus.failed,
+        llmConfig: execution.llmConfig,
         liteAgentSessionId: execution.liteAgentSessionId,
         error: execution.error,
         result: execution.result,

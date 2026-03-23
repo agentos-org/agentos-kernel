@@ -72,5 +72,33 @@ void main() {
         expect(decoded.spec.llmConfig!.contextWindowSize, 64000);
       },
     );
+
+    test('CronRunDto preserves llmConfig through json round trip', () {
+      final run = CronRunDto(
+        runId: 'run-1',
+        cronId: 'cron-1',
+        trigger: 'manual',
+        status: 'succeeded',
+        scheduledAt: DateTime.parse('2026-03-17T09:00:00.000Z'),
+        startedAt: DateTime.parse('2026-03-17T09:00:01.000Z'),
+        finishedAt: DateTime.parse('2026-03-17T09:00:10.000Z'),
+        llmConfig: LLMConfig(
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'external-key',
+          model: 'external-model',
+          contextWindowSize: 64000,
+        ),
+        hasDisplayableResult: true,
+        displayText: 'done',
+      );
+
+      final encoded = run.toJson();
+      final decoded = CronRunDto.fromJson(encoded);
+
+      expect(decoded.llmConfig, isNotNull);
+      expect(decoded.llmConfig!.baseUrl, 'https://api.example.com/v1');
+      expect(decoded.llmConfig!.model, 'external-model');
+      expect(decoded.llmConfig!.contextWindowSize, 64000);
+    });
   });
 }

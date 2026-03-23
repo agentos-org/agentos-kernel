@@ -181,6 +181,7 @@ class CronRunDto {
   final DateTime scheduledAt;
   final DateTime startedAt;
   final DateTime? finishedAt;
+  final LLMConfig? llmConfig;
   final String? liteAgentSessionId;
   final String? error;
   final Map<String, dynamic>? result;
@@ -197,6 +198,7 @@ class CronRunDto {
     required this.startedAt,
     required this.hasDisplayableResult,
     this.finishedAt,
+    this.llmConfig,
     this.liteAgentSessionId,
     this.error,
     this.result,
@@ -219,6 +221,7 @@ class CronRunListItemDto {
   final DateTime scheduledAt;
   final DateTime startedAt;
   final DateTime? finishedAt;
+  final LLMConfig? llmConfig;
   final bool hasDisplayableResult;
   final String? displayText;
 
@@ -231,6 +234,7 @@ class CronRunListItemDto {
     required this.startedAt,
     required this.hasDisplayableResult,
     this.finishedAt,
+    this.llmConfig,
     this.displayText,
   });
 

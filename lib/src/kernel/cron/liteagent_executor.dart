@@ -178,6 +178,7 @@ class LiteAgentCronExecutor implements CronTaskExecutor {
       summaryMessage: summaryMessage,
     );
     return CronExecutionResult(
+      llmConfig: normalizedLlmConfig,
       liteAgentSessionId: baseResult.liteAgentSessionId,
       error: baseResult.error,
       result: _messageToResult(summaryMessage),
@@ -722,10 +723,7 @@ class _CronAgentMessageHandler extends AgentMessageHandler {
           'result': _safeDebugValue(toolReturn.result),
         });
         onToolReturn(
-          EventToolReturn(
-            eventType: ot.EventType.DONE,
-            toolReturn: toolReturn,
-          ),
+          EventToolReturn(eventType: ot.EventType.DONE, toolReturn: toolReturn),
         );
       } catch (error) {
         _debugPrintToolForward('stream_callback_call_forward_error', {

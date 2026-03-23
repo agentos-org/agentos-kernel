@@ -62,6 +62,12 @@ void main() {
         startedAt: DateTime(2026, 1, 2),
         finishedAt: DateTime(2026, 1, 2, 0, 1),
         status: CronRunStatus.succeeded,
+        llmConfig: LLMConfig(
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'run-key',
+          model: 'run-model',
+          contextWindowSize: 32000,
+        ),
         result: const {'content': 'done'},
         displayMessageId: 'msg-1',
         displayText: 'done',
@@ -108,6 +114,9 @@ void main() {
       expect(loadedTask.spec.llmConfig!.contextWindowSize, 64000);
       expect(loadedRun, isNotNull);
       expect(loadedRun!.trigger, CronRunTrigger.manual);
+      expect(loadedRun.llmConfig, isNotNull);
+      expect(loadedRun.llmConfig!.model, 'run-model');
+      expect(loadedRun.llmConfig!.contextWindowSize, 32000);
       expect(loadedRun.hasDisplayableResult, isTrue);
       expect(loadedRun.displayText, 'done');
       expect(loadedMessages, hasLength(1));

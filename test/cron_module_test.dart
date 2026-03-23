@@ -157,6 +157,59 @@ void main() {
       expect(run.trigger, CronRunTrigger.schedule);
     });
 
+    test(
+      'historical run keeps its original llm model after task update',
+      () async {
+        final module = CronModule(
+          store: InMemoryCronTaskStore(),
+          executor: _EchoLlmConfigCronExecutor(),
+        );
+
+        final task = await module.createTask(
+          name: 'nightly-sync',
+          schedule: '*/5 * * * *',
+          source: 'api',
+          spec: AgentCronSpec(
+            systemPrompt: 'You are an auto agent.',
+            content: [Content(type: ContentType.text, message: 'sync records')],
+            llmConfig: LLMConfig(
+              baseUrl: 'https://api.example.com/v1',
+              apiKey: 'task-key-a',
+              model: 'model-a',
+              contextWindowSize: 32000,
+            ),
+          ),
+        );
+
+        final run = await module.runTaskNow(task.cronId);
+
+        await module.updateTask(
+          cronId: task.cronId,
+          spec: AgentCronSpec(
+            systemPrompt: task.spec.systemPrompt,
+            content: task.spec.content,
+            llmConfig: LLMConfig(
+              baseUrl: 'https://api.example.com/v1',
+              apiKey: 'task-key-b',
+              model: 'model-b',
+              contextWindowSize: 64000,
+            ),
+          ),
+        );
+
+        final loadedRun = await module.getRun(run.runId);
+        final runs = await module.listRuns(cronId: task.cronId);
+        final updatedTask = await module.getTask(task.cronId);
+
+        expect(updatedTask, isNotNull);
+        expect(updatedTask!.spec.llmConfig!.model, 'model-b');
+        expect(loadedRun, isNotNull);
+        expect(loadedRun!.llmConfig, isNotNull);
+        expect(loadedRun.llmConfig!.model, 'model-a');
+        expect(runs.single.llmConfig!.model, 'model-a');
+      },
+    );
+
     test('deletes a stored run and cascades its messages', () async {
       final module = CronModule(
         store: InMemoryCronTaskStore(),
@@ -221,6 +274,33 @@ class _FailingCronExecutor implements CronTaskExecutor {
     Future<void> Function(AgentMessage message)? onMessage,
   }) async {
     return const CronExecutionResult(error: 'upstream failed');
+  }
+}
+
+class _EchoLlmConfigCronExecutor implements CronTaskExecutor {
+  @override
+  Future<CronExecutionResult> run(
+    CronTaskDefinition task, {
+    Future<void> Function(AgentMessage message)? onMessage,
+  }) async {
+    return CronExecutionResult(
+      llmConfig: task.spec.llmConfig,
+      liteAgentSessionId: 'session-1',
+      result: {'content': 'sync records'},
+      displayMessageId: 'liteagent-task-1',
+      displayText: 'sync records',
+      messages: [
+        AgentMessage(
+          sessionId: 'session-1',
+          taskId: 'liteagent-task-1',
+          role: AgentRoleType.LLM,
+          to: AgentRoleType.USER,
+          type: AgentMessageType.TEXT,
+          content: 'sync records',
+          createTime: DateTime(2026, 1, 1),
+        ),
+      ],
+    );
   }
 }
 

@@ -2116,6 +2116,7 @@ class KernelService {
       startedAt: run.startedAt,
       hasDisplayableResult: run.hasDisplayableResult,
       finishedAt: run.finishedAt,
+      llmConfig: run.llmConfig,
       liteAgentSessionId: run.liteAgentSessionId,
       error: run.error,
       result: run.result,
@@ -2134,6 +2135,7 @@ class KernelService {
       startedAt: run.startedAt,
       hasDisplayableResult: run.hasDisplayableResult,
       finishedAt: run.finishedAt,
+      llmConfig: run.llmConfig,
       displayText: run.displayText,
     );
   }

@@ -155,6 +155,7 @@ class CronRunRecord {
   final DateTime startedAt;
   final DateTime? finishedAt;
   final CronRunStatus status;
+  final LLMConfig? llmConfig;
   final String? liteAgentSessionId;
   final String? error;
   final Map<String, dynamic>? result;
@@ -169,6 +170,7 @@ class CronRunRecord {
     required this.startedAt,
     required this.status,
     this.finishedAt,
+    this.llmConfig,
     this.liteAgentSessionId,
     this.error,
     this.result,
@@ -185,6 +187,7 @@ class CronRunRecord {
     DateTime? finishedAt,
     CronRunStatus? status,
     CronRunTrigger? trigger,
+    Object? llmConfig = _sentinel,
     Object? liteAgentSessionId = _sentinel,
     Object? error = _sentinel,
     Object? result = _sentinel,
@@ -199,6 +202,9 @@ class CronRunRecord {
       startedAt: startedAt,
       finishedAt: finishedAt ?? this.finishedAt,
       status: status ?? this.status,
+      llmConfig: identical(llmConfig, _sentinel)
+          ? this.llmConfig
+          : llmConfig as LLMConfig?,
       liteAgentSessionId: identical(liteAgentSessionId, _sentinel)
           ? this.liteAgentSessionId
           : liteAgentSessionId as String?,
@@ -233,6 +239,7 @@ class CronRunMessageRecord {
 }
 
 class CronExecutionResult {
+  final LLMConfig? llmConfig;
   final String? liteAgentSessionId;
   final Map<String, dynamic>? result;
   final String? error;
@@ -241,6 +248,7 @@ class CronExecutionResult {
   final String? displayText;
 
   const CronExecutionResult({
+    this.llmConfig,
     this.liteAgentSessionId,
     this.result,
     this.error,
