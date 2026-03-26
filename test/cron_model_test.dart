@@ -38,9 +38,37 @@ void main() {
         expect(task.content.last.type, ContentType.text);
         expect(
           task.content.last.message,
-          '\n[Current Time: 2021-02-04 12:33:22]',
+          '*Current Time: 2021-02-04 12:33:22*',
         );
       },
     );
+  });
+
+  group('AgentCronSpec.toCapability', () {
+    test('forwards skills when provided', () {
+      const plannerSkill = '''
+---
+name: task-planner
+description: Break work into clear ordered steps before execution.
+---
+
+1. Summarize the goal.
+2. Execute step by step.
+''';
+      final spec = AgentCronSpec(
+        systemPrompt: 'You are a cron agent.',
+        content: const [],
+        skills: const [plannerSkill],
+      );
+
+      final capability = spec.toCapability(
+        llmConfig: LLMConfig(
+          baseUrl: 'https://example.com/v1',
+          model: 'test-model',
+        ),
+      );
+
+      expect(capability.skills, const [plannerSkill]);
+    });
   });
 }

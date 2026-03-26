@@ -13,12 +13,14 @@ class AgentCronSpec {
   final List<Content> content;
   final int timeoutSeconds;
   final LLMConfig? llmConfig;
+  final List<String>? skills;
 
   const AgentCronSpec({
     required this.systemPrompt,
     required this.content,
     this.timeoutSeconds = 3600,
     this.llmConfig,
+    this.skills,
   });
 
   Capability toCapability({
@@ -30,6 +32,7 @@ class AgentCronSpec {
     return Capability(
       llmConfig: llmConfig,
       systemPrompt: systemPrompt,
+      skills: skills,
       openSpecList: openSpecList,
       callbackOpenTool: callbackOpenTool,
       timeoutSeconds: timeoutSeconds,

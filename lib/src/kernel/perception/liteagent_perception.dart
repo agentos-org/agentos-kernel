@@ -20,6 +20,7 @@ class LiteAgentPerception implements Perception {
   final LlmConfigResolver? llmConfigResolver;
   final String systemPrompt;
   final List<String>? actionHints;
+  final List<String>? skills;
   final Perception? fallback;
 
   LiteAgentPerception({
@@ -29,6 +30,7 @@ class LiteAgentPerception implements Perception {
     required this.systemPrompt,
     this.llmConfigResolver,
     this.actionHints,
+    this.skills,
     this.fallback,
   });
 
@@ -58,6 +60,7 @@ class LiteAgentPerception implements Perception {
           final capability = Capability(
             llmConfig: effectiveConfig,
             systemPrompt: systemPrompt,
+            skills: skills,
             callbackOpenTool: CallbackOpenTool(
               opentool: _perceptionToolSpecJson(),
             ),

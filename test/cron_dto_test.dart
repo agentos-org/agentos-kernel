@@ -5,6 +5,15 @@ import 'package:test/test.dart';
 void main() {
   group('Cron DTO JSON', () {
     test('AgentCronSpecDto preserves llmConfig through json round trip', () {
+      const plannerSkill = '''
+---
+name: task-planner
+description: Break work into clear ordered steps before execution.
+---
+
+1. Summarize the goal.
+2. Execute step by step.
+''';
       final json = {
         'systemPrompt': 'You are a cron agent.',
         'content': [
@@ -17,6 +26,7 @@ void main() {
           'model': 'external-model',
           'contextWindowSize': 64000,
         },
+        'skills': [plannerSkill],
       };
 
       final spec = AgentCronSpecDto.fromJson(json);
@@ -26,16 +36,27 @@ void main() {
       expect(spec.llmConfig!.baseUrl, 'https://api.example.com/v1');
       expect(spec.llmConfig!.model, 'external-model');
       expect(spec.llmConfig!.contextWindowSize, 64000);
+      expect(spec.skills, const [plannerSkill]);
       expect(encoded['llmConfig'], isA<Map<String, dynamic>>());
       final llmConfig = encoded['llmConfig'] as Map<String, dynamic>;
       expect(llmConfig['baseUrl'], 'https://api.example.com/v1');
       expect(llmConfig['model'], 'external-model');
       expect(llmConfig['contextWindowSize'], 64000);
+      expect(encoded['skills'], const [plannerSkill]);
     });
 
     test(
       'CronTaskDto preserves nested spec llmConfig through json round trip',
       () {
+        const plannerSkill = '''
+---
+name: task-planner
+description: Break work into clear ordered steps before execution.
+---
+
+1. Summarize the goal.
+2. Execute step by step.
+''';
         final task = CronTaskDto(
           cronId: 'cron-1',
           name: 'nightly-report',
@@ -60,6 +81,7 @@ void main() {
               model: 'external-model',
               contextWindowSize: 64000,
             ),
+            skills: const [plannerSkill],
           ),
         );
 
@@ -70,6 +92,7 @@ void main() {
         expect(decoded.spec.llmConfig!.baseUrl, 'https://api.example.com/v1');
         expect(decoded.spec.llmConfig!.model, 'external-model');
         expect(decoded.spec.llmConfig!.contextWindowSize, 64000);
+        expect(decoded.spec.skills, const [plannerSkill]);
       },
     );
 

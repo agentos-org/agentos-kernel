@@ -193,6 +193,7 @@ class LiteAgentPlanning extends Planning {
   final int memoryLimit;
   final OpenToolDirectory openToolDirectory;
   final List<ExecutionAgentTemplate> executionAgents;
+  final List<String>? skills;
 
   LiteAgentPlanning({
     required this.llmQueue,
@@ -203,6 +204,7 @@ class LiteAgentPlanning extends Planning {
     this.memoryLimit = 5,
     OpenToolDirectory? openToolDirectory,
     List<ExecutionAgentTemplate>? executionAgents,
+    this.skills,
   }) : openToolDirectory = openToolDirectory ?? OpenToolDirectory(),
        executionAgents = executionAgents ?? const [];
 
@@ -231,6 +233,7 @@ class LiteAgentPlanning extends Planning {
         final capability = Capability(
           llmConfig: effectiveConfig,
           systemPrompt: systemPrompt,
+          skills: skills,
           callbackOpenTool: CallbackOpenTool(opentool: _planningToolSpecJson()),
         );
         final session = await sdk.initSession(capability: capability);
@@ -352,10 +355,7 @@ class LiteAgentPlanning extends Planning {
               'name': 'arguments',
               'description': 'Function arguments.',
               'required': true,
-              'schema': {
-                'type': 'object',
-                'properties': {},
-              },
+              'schema': {'type': 'object', 'properties': {}},
             },
             {
               'name': 'confidence',
@@ -399,10 +399,7 @@ class LiteAgentPlanning extends Planning {
               'required': false,
               'schema': {
                 'type': 'array',
-                'items': {
-                  'type': 'object',
-                  'properties': {},
-                },
+                'items': {'type': 'object', 'properties': {}},
               },
             },
             {

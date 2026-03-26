@@ -28,10 +28,15 @@ class LiteAgentClient {
     required String systemPrompt,
     required String userPrompt,
     required LlmCallContext context,
+    List<String>? skills,
   }) async {
     final effectiveConfig = normalizeLlmConfigForLiteAgent(llmConfig);
     final session = await sdk.initSimple(
-      SimpleCapability(llmConfig: effectiveConfig, systemPrompt: systemPrompt),
+      SimpleCapability(
+        llmConfig: effectiveConfig,
+        systemPrompt: systemPrompt,
+        skills: skills,
+      ),
     );
     final task = UserTask(
       content: [Content(type: ContentType.text, message: userPrompt)],
@@ -55,10 +60,15 @@ class LiteAgentClient {
     required String systemPrompt,
     required String userPrompt,
     required LlmCallContext context,
+    List<String>? skills,
   }) async {
     final effectiveConfig = normalizeLlmConfigForLiteAgent(llmConfig);
     final session = await sdk.initSimple(
-      SimpleCapability(llmConfig: effectiveConfig, systemPrompt: systemPrompt),
+      SimpleCapability(
+        llmConfig: effectiveConfig,
+        systemPrompt: systemPrompt,
+        skills: skills,
+      ),
     );
     final task = UserTask(
       content: [Content(type: ContentType.text, message: userPrompt)],

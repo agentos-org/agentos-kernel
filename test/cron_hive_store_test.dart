@@ -23,6 +23,15 @@ void main() {
     });
 
     test('persists tasks runs and messages across reopen', () async {
+      const plannerSkill = '''
+---
+name: task-planner
+description: Break work into clear ordered steps before execution.
+---
+
+1. Summarize the goal.
+2. Execute step by step.
+''';
       final firstStore = HiveCronTaskStore(
         taskBox: await Hive.openBox<Map>('cron_tasks'),
         runBox: await Hive.openBox<Map>('cron_runs'),
@@ -48,6 +57,7 @@ void main() {
             model: 'external-model',
             contextWindowSize: 64000,
           ),
+          skills: const [plannerSkill],
         ),
         createdAt: DateTime(2026, 1, 1),
         updatedAt: DateTime(2026, 1, 1),
@@ -112,6 +122,7 @@ void main() {
       expect(loadedTask.spec.llmConfig!.baseUrl, 'https://api.example.com/v1');
       expect(loadedTask.spec.llmConfig!.model, 'external-model');
       expect(loadedTask.spec.llmConfig!.contextWindowSize, 64000);
+      expect(loadedTask.spec.skills, const [plannerSkill]);
       expect(loadedRun, isNotNull);
       expect(loadedRun!.trigger, CronRunTrigger.manual);
       expect(loadedRun.llmConfig, isNotNull);

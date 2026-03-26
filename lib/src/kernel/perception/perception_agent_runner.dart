@@ -21,6 +21,7 @@ class PerceptionAgentRunner {
   final String systemPrompt;
   final KernelLogger? logger;
   final String? openToolJson;
+  final List<String>? skills;
 
   final Map<String, Session> _sessions = {};
   final Map<String, _PerceptionContext> _contexts = {};
@@ -33,6 +34,7 @@ class PerceptionAgentRunner {
     required this.systemPrompt,
     this.logger,
     this.openToolJson,
+    this.skills,
   });
 
   JobHandle submitRaw({
@@ -122,6 +124,7 @@ class PerceptionAgentRunner {
     final capability = Capability(
       llmConfig: effectiveConfig,
       systemPrompt: systemPrompt,
+      skills: skills,
       callbackOpenTool: CallbackOpenTool(
         opentool: openToolJson ?? _defaultOpenToolJson(),
       ),

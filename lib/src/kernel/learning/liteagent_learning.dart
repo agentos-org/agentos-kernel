@@ -21,6 +21,7 @@ class LiteAgentLearning implements Learning {
   final LLMConfig llmConfig;
   final LlmConfigResolver? llmConfigResolver;
   final String systemPrompt;
+  final List<String>? skills;
 
   LiteAgentLearning({
     required this.llmQueue,
@@ -29,6 +30,7 @@ class LiteAgentLearning implements Learning {
     required this.llmConfig,
     required this.systemPrompt,
     this.llmConfigResolver,
+    this.skills,
   });
 
   @override
@@ -57,6 +59,7 @@ class LiteAgentLearning implements Learning {
           final capability = Capability(
             llmConfig: effectiveConfig,
             systemPrompt: systemPrompt,
+            skills: skills,
             callbackOpenTool: CallbackOpenTool(
               opentool: _learningToolSpecJson(),
             ),

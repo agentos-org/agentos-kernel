@@ -120,6 +120,9 @@ AgentCronSpecDto _$AgentCronSpecDtoFromJson(Map<String, dynamic> json) =>
       llmConfig: json['llmConfig'] == null
           ? null
           : LLMConfig.fromJson(json['llmConfig'] as Map<String, dynamic>),
+      skills: (json['skills'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
     );
 
 Map<String, dynamic> _$AgentCronSpecDtoToJson(AgentCronSpecDto instance) {
@@ -136,6 +139,7 @@ Map<String, dynamic> _$AgentCronSpecDtoToJson(AgentCronSpecDto instance) {
   }
 
   writeNotNull('llmConfig', instance.llmConfig?.toJson());
+  writeNotNull('skills', instance.skills);
   return val;
 }
 

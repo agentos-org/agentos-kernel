@@ -207,6 +207,7 @@ class HiveCronTaskStore implements CronTaskStore {
         'content': task.spec.content.map((item) => item.toJson()).toList(),
         'timeoutSeconds': task.spec.timeoutSeconds,
         'llmConfig': _llmConfigToMap(task.spec.llmConfig),
+        'skills': task.spec.skills,
       },
       'createdAt': task.createdAt.toIso8601String(),
       'updatedAt': task.updatedAt.toIso8601String(),
@@ -244,6 +245,9 @@ class HiveCronTaskStore implements CronTaskStore {
         content: contentList,
         timeoutSeconds: (specMap['timeoutSeconds'] as num?)?.toInt() ?? 3600,
         llmConfig: _llmConfigFromMap(specMap['llmConfig']),
+        skills: (specMap['skills'] as List<dynamic>?)
+            ?.map((item) => item as String)
+            .toList(growable: false),
       ),
       createdAt: DateTime.parse(value['createdAt'] as String),
       updatedAt: DateTime.parse(value['updatedAt'] as String),

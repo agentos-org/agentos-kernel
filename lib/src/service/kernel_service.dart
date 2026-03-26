@@ -152,6 +152,7 @@ class KernelServiceConfig {
   final LiteAgentSDK liteAgentSdk;
   final List<PresetOpenSpec>? presetOpenSpecList;
   final LlmConfigGroup? llm;
+  final List<String>? learningSkills;
   final EmbeddingsConfig embeddings;
   final KernelRuntimeConfig runtime;
 
@@ -159,6 +160,7 @@ class KernelServiceConfig {
     required this.liteAgentSdk,
     this.presetOpenSpecList,
     this.llm,
+    this.learningSkills,
     required this.embeddings,
     this.runtime = const KernelRuntimeConfig(),
   });
@@ -247,6 +249,7 @@ class KernelService {
   final CronModule? _cronModule;
   final CronDaemonOpenSpecProvider? _cronDaemonAccess;
   final CronLlmConfigAccess? _cronLlmConfigAccess;
+  final List<String>? _learningSkills;
 
   /// Wraps the kernel with a simplified API for external callers.
   factory KernelService(
@@ -270,6 +273,7 @@ class KernelService {
     String embeddingsBaseUrl = '',
     ModelProfiler? modelProfiler,
     CronModule? cronModule,
+    List<String>? learningSkills,
   }) {
     return KernelService._internal(
       kernel,
@@ -292,6 +296,7 @@ class KernelService {
       embeddingsBaseUrl: embeddingsBaseUrl,
       modelProfiler: modelProfiler,
       cronModule: cronModule,
+      learningSkills: learningSkills,
     );
   }
 
@@ -319,6 +324,7 @@ class KernelService {
     CronModule? cronModule,
     CronDaemonOpenSpecProvider? cronDaemonAccess,
     CronLlmConfigAccess? cronLlmConfigAccess,
+    List<String>? learningSkills,
   }) : _perceptionRunner = perceptionRunner,
        _llmConfigPool = llmConfigPool,
        _perceptionSwitch = perceptionSwitch,
@@ -344,7 +350,8 @@ class KernelService {
        _modelProfiler = modelProfiler,
        _cronModule = cronModule,
        _cronDaemonAccess = cronDaemonAccess,
-       _cronLlmConfigAccess = cronLlmConfigAccess;
+       _cronLlmConfigAccess = cronLlmConfigAccess,
+       _learningSkills = learningSkills;
 
   String get defaultUserId => _defaultUserId;
 
@@ -540,6 +547,7 @@ class KernelService {
         openToolDirectory: openToolDirectory,
         logger: logger,
         runtimeConfig: config.runtime,
+        learningSkills: config.learningSkills,
       );
       perceptionDelegateSwitch.delegate = llmDelegates.perception;
       planningSwitch.delegate = llmDelegates.planning;
@@ -665,6 +673,7 @@ class KernelService {
       cronModule: cronModule,
       cronDaemonAccess: cronDaemonAccess,
       cronLlmConfigAccess: cronLlmConfigAccess,
+      learningSkills: config.learningSkills,
     );
     service._memorySummarizer = memorySummarizer;
     service._preferenceAggregator = preferenceAggregator;
@@ -906,6 +915,7 @@ class KernelService {
       openToolDirectory: openToolDirectory,
       logger: _logger,
       runtimeConfig: _runtimeConfig,
+      learningSkills: _learningSkills,
     );
     perceptionSwitch.delegate = llmDelegates.perception;
     planningSwitch.delegate = llmDelegates.planning;
@@ -1759,6 +1769,7 @@ class KernelService {
     required OpenToolDirectory openToolDirectory,
     required KernelLogger? logger,
     required KernelRuntimeConfig runtimeConfig,
+    List<String>? learningSkills,
   }) {
     final perception = LiteAgentPerception(
       llmQueue: llmQueue,
@@ -1817,6 +1828,7 @@ class KernelService {
       ),
       systemPrompt:
           'You extract user preference signals. Use emit_preference or reject_preference.',
+      skills: learningSkills,
     );
     final learning = DeferredLearning(
       delegate: liteAgentLearning,
@@ -2038,6 +2050,7 @@ class KernelService {
       content: dto.content,
       timeoutSeconds: dto.timeoutSeconds,
       llmConfig: dto.llmConfig,
+      skills: dto.skills,
     );
   }
 
@@ -2047,6 +2060,7 @@ class KernelService {
       content: spec.content,
       timeoutSeconds: spec.timeoutSeconds,
       llmConfig: spec.llmConfig,
+      skills: spec.skills,
     );
   }
 
