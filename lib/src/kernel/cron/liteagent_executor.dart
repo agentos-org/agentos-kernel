@@ -62,9 +62,7 @@ class LiteAgentCronExecutor implements CronTaskExecutor {
               ?.call()
               .map(normalizeLlmConfigForLiteAgent)
               .toList(growable: false);
-    final catalog =
-        await daemonToolCatalogResolver?.call() ??
-        const <CronDaemonToolCatalogItem>[];
+    final catalog = await _resolveDaemonToolCatalog();
     final callbackTool = _buildCallbackTool(catalog);
     final capability = task.spec.toCapability(
       llmConfig: normalizedLlmConfig,
@@ -232,6 +230,32 @@ class LiteAgentCronExecutor implements CronTaskExecutor {
       mappings: mappings,
       toolCount: catalog.length,
     );
+  }
+
+  Future<List<CronDaemonToolCatalogItem>> _resolveDaemonToolCatalog() async {
+    final resolver = daemonToolCatalogResolver;
+    if (resolver == null) {
+      return const <CronDaemonToolCatalogItem>[];
+    }
+    try {
+      return await resolver();
+    } catch (error, stackTrace) {
+      logger?.warn(
+        'Failed to resolve cron daemon tool catalog. Continuing without daemon tools.',
+        data: {
+          'host': daemonHost,
+          'port': daemonPort,
+          'error': error.toString(),
+          'stackTrace': stackTrace.toString(),
+        },
+      );
+      _debugPrintStage('executor_daemon_catalog_resolve_failed', {
+        'host': daemonHost,
+        'port': daemonPort,
+        'error': error.toString(),
+      });
+      return const <CronDaemonToolCatalogItem>[];
+    }
   }
 
   String _syntheticFunctionName({

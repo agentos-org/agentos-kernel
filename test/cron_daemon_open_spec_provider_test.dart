@@ -72,6 +72,33 @@ void main() {
       expect(first.map((item) => item.spec.info.title), ['Tool A']);
       expect(second.map((item) => item.spec.info.title), ['Tool A']);
     });
+
+    test('skips a single running tool when loading its spec fails', () async {
+      final provider = CronDaemonOpenSpecProvider(
+        host: '127.0.0.1',
+        port: 8080,
+        listTools: ({required String host, required int port}) async => [
+          _toolInfo(id: 'tool-a', status: 'running'),
+          _toolInfo(id: 'tool-b', status: 'running'),
+        ],
+        loadTool: ({
+          required String host,
+          required int port,
+          required String toolId,
+        }) async {
+          if (toolId == 'tool-b') {
+            throw StateError('404');
+          }
+          return _buildTool('Tool A', 'search_a');
+        },
+      );
+
+      final catalog = await provider.resolveCatalog();
+
+      expect(catalog, hasLength(1));
+      expect(catalog.single.toolId, 'tool-a');
+      expect(catalog.single.spec.info.title, 'Tool A');
+    });
   });
 }
 

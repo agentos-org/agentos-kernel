@@ -134,31 +134,51 @@ class CronDaemonOpenSpecProvider {
           });
           continue;
         }
-        final spec = await _loadTool(
-          host: host,
-          port: port,
-          toolId: toolInfo.id,
-        );
-        if (spec == null) {
-          _debugPrint('refresh_skip_tool_spec_missing', {
+        try {
+          final spec = await _loadTool(
+            host: host,
+            port: port,
+            toolId: toolInfo.id,
+          );
+          if (spec == null) {
+            _debugPrint('refresh_skip_tool_spec_missing', {
+              'toolId': toolInfo.id,
+              'alias': toolInfo.alias,
+            });
+            continue;
+          }
+          _debugPrint('refresh_tool_spec_loaded', {
             'toolId': toolInfo.id,
             'alias': toolInfo.alias,
           });
+          catalog.add(
+            CronDaemonToolCatalogItem(
+              toolId: toolInfo.id,
+              alias: toolInfo.alias,
+              status: toolInfo.status,
+              serverId: toolInfo.serverId,
+              spec: spec,
+            ),
+          );
+        } catch (error, stackTrace) {
+          _debugPrint('refresh_skip_tool_spec_load_failed', {
+            'toolId': toolInfo.id,
+            'alias': toolInfo.alias,
+            'error': error.toString(),
+          });
+          logger?.warn(
+            'Failed to load cron daemon tool spec. Skipping tool.',
+            data: {
+              'host': host,
+              'port': port,
+              'toolId': toolInfo.id,
+              'alias': toolInfo.alias,
+              'error': error.toString(),
+              'stackTrace': stackTrace.toString(),
+            },
+          );
           continue;
         }
-        _debugPrint('refresh_tool_spec_loaded', {
-          'toolId': toolInfo.id,
-          'alias': toolInfo.alias,
-        });
-        catalog.add(
-          CronDaemonToolCatalogItem(
-            toolId: toolInfo.id,
-            alias: toolInfo.alias,
-            status: toolInfo.status,
-            serverId: toolInfo.serverId,
-            spec: spec,
-          ),
-        );
       }
       _cachedCatalog = List<CronDaemonToolCatalogItem>.unmodifiable(catalog);
       _cachedAt = _now();
