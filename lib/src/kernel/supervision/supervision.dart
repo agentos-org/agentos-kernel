@@ -7,14 +7,11 @@ import 'package:lite_embeddings_sdk_dart/lite_embeddings_sdk_dart.dart'
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import 'package:opentool_daemon/opentool_daemon_client.dart';
 
-import '../events.dart';
 import '../agent/model.dart';
 import 'model.dart';
 import 'model_profiler.dart';
 
 abstract class Supervision {
-  SupervisionAdvice? observe(KernelEvent event);
-
   void onLlmEnqueued(LlmRequestMeta meta);
   void onLlmStarted(LlmRequestMeta meta);
   void onLlmFirstToken(LlmRequestMeta meta, DateTime firstTokenAt);
@@ -26,11 +23,6 @@ abstract class Supervision {
 }
 
 class PassiveSupervision implements Supervision {
-  @override
-  SupervisionAdvice? observe(KernelEvent event) {
-    return null;
-  }
-
   @override
   void onLlmEnqueued(LlmRequestMeta meta) {}
 
@@ -70,7 +62,6 @@ class AdaptiveSupervision implements Supervision {
   final Map<String, List<LlmCallMetrics>> _recentByModel = {};
   final Map<String, Set<String>> _generatingByModel = {};
   final Set<String> _inFlight = {};
-  final Map<String, _ToolStats> _toolStats = {};
   final Map<String, _ModelHealth> _modelHealth = {};
   Map<String, KernelLlmModel> _modelCatalog = {};
   ModelProfiler? _modelProfiler;
@@ -111,28 +102,6 @@ class AdaptiveSupervision implements Supervision {
     this.largeModelSizeGbThreshold = 20,
     this.mediumModelSizeGbThreshold = 10,
   });
-
-  @override
-  SupervisionAdvice? observe(KernelEvent event) {
-    if (event is ToolCallStartedEvent) {
-      _toolStats.putIfAbsent(event.toolId, () => _ToolStats()).onStart();
-    } else if (event is ToolCallDoneEvent) {
-      final duration = event.completedAt
-          .difference(event.startedAt)
-          .inMilliseconds;
-      _toolStats
-          .putIfAbsent(event.toolId, () => _ToolStats())
-          .onSuccess(duration);
-    } else if (event is ToolCallFailedEvent) {
-      final duration = event.completedAt
-          .difference(event.startedAt)
-          .inMilliseconds;
-      _toolStats
-          .putIfAbsent(event.toolId, () => _ToolStats())
-          .onFailure(duration, event.error);
-    }
-    return null;
-  }
 
   @override
   void onLlmEnqueued(LlmRequestMeta meta) {}
@@ -227,14 +196,6 @@ class AdaptiveSupervision implements Supervision {
       1,
       maxConcurrency,
     );
-  }
-
-  Map<String, ToolStatsSnapshot> toolStatsSnapshot() {
-    final snapshot = <String, ToolStatsSnapshot>{};
-    _toolStats.forEach((key, stats) {
-      snapshot[key] = stats.toSnapshot();
-    });
-    return snapshot;
   }
 
   Map<String, ModelHealthSnapshot> modelHealthSnapshot() {
@@ -626,22 +587,6 @@ class AdaptiveSupervision implements Supervision {
   }
 }
 
-class ToolStatsSnapshot {
-  final int started;
-  final int success;
-  final int failed;
-  final double? avgDurationMs;
-  final Map<String, int> errorCounts;
-
-  const ToolStatsSnapshot({
-    required this.started,
-    required this.success,
-    required this.failed,
-    required this.avgDurationMs,
-    required this.errorCounts,
-  });
-}
-
 class ModelHealthSnapshot {
   final bool available;
   final int consecutiveFailures;
@@ -656,45 +601,6 @@ class ModelHealthSnapshot {
     required this.lastFailureAt,
     required this.lastSuccessAt,
   });
-}
-
-class _ToolStats {
-  int started = 0;
-  int success = 0;
-  int failed = 0;
-  int _durationTotal = 0;
-  int _durationCount = 0;
-  final Map<String, int> errorCounts = {};
-
-  void onStart() {
-    started += 1;
-  }
-
-  void onSuccess(int durationMs) {
-    success += 1;
-    _durationTotal += durationMs;
-    _durationCount += 1;
-  }
-
-  void onFailure(int durationMs, String error) {
-    failed += 1;
-    _durationTotal += durationMs;
-    _durationCount += 1;
-    errorCounts.update(error, (count) => count + 1, ifAbsent: () => 1);
-  }
-
-  ToolStatsSnapshot toSnapshot() {
-    final avgDuration = _durationCount == 0
-        ? null
-        : _durationTotal / _durationCount;
-    return ToolStatsSnapshot(
-      started: started,
-      success: success,
-      failed: failed,
-      avgDurationMs: avgDuration,
-      errorCounts: Map<String, int>.from(errorCounts),
-    );
-  }
 }
 
 class _ModelHealth {

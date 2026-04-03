@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:agentos_kernel/agentos_kernel.dart';
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
-import 'mock_crud_tool.dart';
 
 Future<void> main() async {
   // Phase 1+: fill these values when external services are actually up.
@@ -19,7 +18,6 @@ Future<void> main() async {
   const opentoolDaemonPort = 8080;
 
   final service = await KernelService.create();
-  service.registerLocalOpenTool(MockCrudTool());
 
   final healthSubscription = service.onExternalServiceHealthChange((health) {
     print(
@@ -32,11 +30,6 @@ Future<void> main() async {
   _printReadiness(service, 'after create');
 
   print('Phase 0: kernel is up, but external services are not configured yet.');
-  try {
-    await service.suggestNextAction(source: KernelSources.cli);
-  } catch (error) {
-    print('Expected error (LLM not configured): $error');
-  }
 
   if (_isConfigured(opentoolDaemonHost)) {
     service.updateOpenToolDaemon(
@@ -99,17 +92,6 @@ Future<void> main() async {
       requireEmbeddings: true,
       requireOpenToolDaemon: true,
     );
-  }
-
-  // Optional remote OpenTool endpoint hot switch example:
-  // service.updateRemoteOpenToolEndpoint(
-  //   '<TOOL_ID>',
-  //   serverUrl: '<NEW_OPENTOOL_SERVER_URL>',
-  // );
-
-  if (_isConfigured(liteAgentBaseUrl) && _isConfigured(liteAgentModel)) {
-    final suggest = await service.suggestNextAction(source: KernelSources.cli);
-    print('Suggest candidates: ${suggest.candidates.length}');
   }
 
   healthSubscription.cancel();

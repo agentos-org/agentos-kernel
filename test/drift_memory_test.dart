@@ -7,25 +7,24 @@ import 'package:test/test.dart';
 
 void main() {
   group('DriftMemory initialization', () {
-    test('first listScopes opens db without throwing', () async {
+    test('opens db without throwing', () async {
       final dbPath = await _newDbPath();
       final memory = DriftMemory.open(path: dbPath);
 
-      final scopes = await memory.listScopes();
+      final items = await memory.listMemoryItems();
 
-      expect(scopes, isEmpty);
+      expect(items, isEmpty);
     });
 
-    test('creates memory_records table and indexes', () async {
+    test('creates memory tables and indexes', () async {
       final dbPath = await _newDbPath();
       final memory = DriftMemory.open(path: dbPath);
-      await memory.listScopes();
-      await memory.record(
-        MemoryRecord(
-          jobId: 'job-1',
-          scope: 'scope-a',
+      await memory.upsertMemoryItem(
+        MemoryItem(
+          id: 'item-1',
           type: 'TEST',
-          data: const {'k': 'v'},
+          sourceId: 'source-1',
+          content: 'hello',
           timestamp: DateTime.now(),
         ),
       );
@@ -41,285 +40,168 @@ WHERE type IN ('table', 'index');
           .map((row) => row['name'] as String)
           .toSet();
 
-      expect(names, contains('memory_records'));
-      expect(names, contains('memory_records_scope_ts'));
-      expect(names, contains('memory_records_scope_type_ts'));
-      expect(names, contains('memory_records_user_ts'));
-      expect(names, contains('memory_records_session_ts'));
-      expect(names, contains('memory_records_bundle_ts'));
-      expect(names, contains('memory_records_task_id'));
-      expect(names, contains('memory_records_liteagent_session_ts'));
+      expect(names, contains('memory_items'));
+      expect(names, contains('memory_items_type_ts'));
+      expect(names, contains('memory_pipeline_state'));
     });
 
-    test('assigns ids to records and deletes by id', () async {
+    test('upserts memory items and deletes by id', () async {
       final dbPath = await _newDbPath();
       final memory = DriftMemory.open(path: dbPath);
-      await memory.record(
-        MemoryRecord(
-          jobId: 'job-1',
-          scope: 'scope-a',
+      await memory.upsertMemoryItem(
+        MemoryItem(
+          id: 'item-1',
           type: 'TEST',
-          data: const {'text': 'first'},
+          sourceId: 'source-1',
+          content: 'first',
           timestamp: DateTime.now(),
         ),
       );
-      await memory.record(
-        MemoryRecord(
-          jobId: 'job-2',
-          scope: 'scope-a',
+      await memory.upsertMemoryItem(
+        MemoryItem(
+          id: 'item-2',
           type: 'TEST',
-          data: const {'text': 'second'},
+          sourceId: 'source-2',
+          content: 'second',
           timestamp: DateTime.now().add(const Duration(seconds: 1)),
         ),
       );
 
-      final records = await memory.listRecords(scope: 'scope-a');
+      final items = await memory.listMemoryItems(limit: 10);
 
-      expect(records, hasLength(2));
-      expect(records.first.id, isNotNull);
-      expect(records.last.id, isNotNull);
+      expect(items, hasLength(2));
+      expect(items.first.id, 'item-1');
+      expect(items.last.id, 'item-2');
 
-      await memory.deleteRecord(records.first.id!);
+      await memory.deleteMemoryItem('item-1');
 
-      final remaining = await memory.listRecords(scope: 'scope-a');
+      final remaining = await memory.listMemoryItems(limit: 10);
       expect(remaining, hasLength(1));
-      expect(remaining.single.id, records.last.id);
-      expect(remaining.single.data?['text'], 'second');
+      expect(remaining.single.id, 'item-2');
+      expect(remaining.single.content, 'second');
     });
 
-    test('lists summary records with pagination', () async {
+    test('lists memory items with pagination', () async {
       final dbPath = await _newDbPath();
       final memory = DriftMemory.open(path: dbPath);
       for (var i = 0; i < 4; i++) {
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-summary-$i',
-            scope: 'scope-a',
-            type: 'MEMORY_SUMMARY',
-            data: {'summaryText': 'summary-$i'},
+        await memory.upsertMemoryItem(
+          MemoryItem(
+            id: 'item-$i',
+            type: 'TEST',
+            sourceId: 'source-$i',
+            content: 'record-$i',
             timestamp: DateTime.now().add(Duration(seconds: i)),
           ),
         );
       }
-      await memory.record(
-        MemoryRecord(
-          jobId: 'job-detail',
-          scope: 'scope-a',
-          type: 'TEST',
-          data: const {'text': 'detail'},
-          timestamp: DateTime.now().add(const Duration(seconds: 10)),
-        ),
-      );
-
-      final page = await memory.listRecords(
-        type: 'MEMORY_SUMMARY',
-        includeSummaries: true,
+      final page = await memory.listMemoryItems(
+        type: 'TEST',
         offset: 2,
         limit: 2,
       );
 
       expect(page, hasLength(2));
-      expect(page.map((record) => record.data?['summaryText']), [
-        'summary-2',
-        'summary-3',
-      ]);
+      expect(page.map((item) => item.content), ['record-2', 'record-3']);
     });
 
-    test(
-      'returns structured short-term and long-term memory snapshot',
-      () async {
-        final dbPath = await _newDbPath();
-        final memory = DriftMemory.open(path: dbPath);
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-short',
-            scope: 'scope-a',
-            type: shortTermMemoryType,
-            data: const {'summaryText': 'recent summary'},
-            timestamp: DateTime.now(),
-          ),
-        );
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-long',
-            scope: 'scope-a',
-            type: longTermMemoryType,
-            data: const {'summaryText': 'durable summary'},
-            timestamp: DateTime.now().add(const Duration(seconds: 1)),
-          ),
-        );
-
-        final snapshot = await memory.getSnapshot(scope: 'scope-a');
-
-        expect(snapshot.shortTermMemory['summaryText'], 'recent summary');
-        expect(snapshot.longTermMemory['summaryText'], 'durable summary');
-        expect(
-          snapshot.data,
-          containsPair(
-            'shortTermMemory',
-            containsPair('summaryText', 'recent summary'),
-          ),
-        );
-      },
-    );
-
-    test('listRecords excludes memory state records by default', () async {
+    test('stores agent memory messages directly into memory item', () async {
       final dbPath = await _newDbPath();
       final memory = DriftMemory.open(path: dbPath);
-      await memory.record(
-        MemoryRecord(
-          jobId: 'job-short',
-          scope: 'scope-a',
-          type: shortTermMemoryType,
-          data: const {'summaryText': 'recent summary'},
-          timestamp: DateTime.now(),
-        ),
+      final base = DateTime.utc(2026, 1, 1, 8, 0, 0);
+
+      await memory.appendAgentMemoryMessage(
+        sessionId: 'session-a',
+        taskId: 'task-1',
+        actorId: 'alice',
+        actorType: AgentMemoryActorType.user,
+        content: const ['你好', '帮我查日程'],
+        timestamp: base,
       );
-      await memory.record(
-        MemoryRecord(
-          jobId: 'job-detail',
-          scope: 'scope-a',
-          type: 'TEST',
-          data: const {'text': 'detail'},
-          timestamp: DateTime.now().add(const Duration(seconds: 1)),
-        ),
+      await memory.appendAgentMemoryMessage(
+        sessionId: 'session-a',
+        taskId: 'task-2',
+        actorId: 'calendar.app',
+        actorType: AgentMemoryActorType.app,
+        content: const ['今天下午 3 点有会议'],
+        timestamp: base.add(const Duration(seconds: 1)),
       );
 
-      final records = await memory.listRecords(scope: 'scope-a');
+      final derived = await memory.getMemoryItem('session-a');
 
-      expect(records, hasLength(1));
-      expect(records.single.type, 'TEST');
+      expect(derived, isNotNull);
+      expect(derived!.type, agentMemoryItemType);
+      expect(derived.sourceId, 'session-a');
+      expect(
+        derived.content,
+        contains('alice(user) 2026-01-01T08:00:00.000Z [task-1]:'),
+      );
+      expect(derived.content, contains('calendar.app(app)'));
+      expect(derived.content, contains('今天下午 3 点有会议'));
     });
 
-    test(
-      'deleteDetailRecordsBefore removes only covered raw records',
-      () async {
-        final dbPath = await _newDbPath();
-        final memory = DriftMemory.open(path: dbPath);
-        final base = DateTime.now();
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-detail-old',
-            scope: 'scope-a',
-            type: 'TEST',
-            data: const {'text': 'old'},
-            timestamp: base,
-          ),
-        );
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-summary',
-            scope: 'scope-a',
-            type: memorySummaryType,
-            data: const {'summaryText': 'covered'},
-            timestamp: base.add(const Duration(seconds: 1)),
-          ),
-        );
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-short',
-            scope: 'scope-a',
-            type: shortTermMemoryType,
-            data: const {'summaryText': 'short'},
-            timestamp: base.add(const Duration(seconds: 2)),
-          ),
-        );
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-detail-new',
-            scope: 'scope-a',
-            type: 'TEST',
-            data: const {'text': 'new'},
-            timestamp: base.add(const Duration(seconds: 3)),
-          ),
-        );
-
-        await memory.deleteDetailRecordsBefore(
-          before: base.add(const Duration(seconds: 1)),
-          scope: 'scope-a',
-        );
-
-        final records = await memory.listRecords(
-          scope: 'scope-a',
-          includeSummaries: true,
-        );
-        expect(records.map((record) => record.jobId), [
-          'job-summary',
-          'job-short',
-          'job-detail-new',
-        ]);
-      },
-    );
-
-    test(
-      'deleteSummaryRecordsBefore removes absorbed summaries only',
-      () async {
-        final dbPath = await _newDbPath();
-        final memory = DriftMemory.open(path: dbPath);
-        final base = DateTime.now();
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-summary-1',
-            scope: 'scope-a',
-            type: memorySummaryType,
-            data: const {'summaryText': 'summary-1'},
-            timestamp: base,
-          ),
-        );
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-summary-2',
-            scope: 'scope-a',
-            type: memorySummaryType,
-            data: const {'summaryText': 'summary-2'},
-            timestamp: base.add(const Duration(seconds: 1)),
-          ),
-        );
-
-        await memory.deleteSummaryRecordsBefore(before: base, scope: 'scope-a');
-
-        final records = await memory.listRecords(
-          scope: 'scope-a',
-          type: memorySummaryType,
-          includeSummaries: true,
-        );
-        expect(records, hasLength(1));
-        expect(records.single.jobId, 'job-summary-2');
-      },
-    );
-
-    test('pruneStateRecords keeps only latest state versions', () async {
+    test('lists memory items with pagination and deletes by id', () async {
       final dbPath = await _newDbPath();
       final memory = DriftMemory.open(path: dbPath);
-      final base = DateTime.now();
-      for (var i = 0; i < 5; i++) {
-        await memory.record(
-          MemoryRecord(
-            jobId: 'job-short-$i',
-            scope: 'scope-a',
-            type: shortTermMemoryType,
-            data: {'summaryText': 'short-$i'},
-            timestamp: base.add(Duration(seconds: i)),
+      final base = DateTime.utc(2026, 1, 1, 8, 0, 0);
+      for (var i = 0; i < 3; i++) {
+        await memory.upsertMemoryItem(
+          MemoryItem(
+            id: 'item-$i',
+            type: 'TEST',
+            sourceId: 'source-$i',
+            content: 'content-$i',
+            timestamp: base.add(Duration(minutes: i)),
           ),
         );
       }
 
-      await memory.pruneStateRecords(
-        type: shortTermMemoryType,
-        keepLatest: 2,
-        scope: 'scope-a',
+      final page = await memory.listMemoryItems(offset: 1, limit: 1);
+      expect(page, hasLength(1));
+      expect(page.single.id, 'item-1');
+
+      await memory.deleteMemoryItem('item-1');
+      final all = await memory.listMemoryItems(limit: 10);
+      expect(all.map((item) => item.id), ['item-0', 'item-2']);
+    });
+
+    test('lists memory summaries with pagination and deletes by id', () async {
+      final dbPath = await _newDbPath();
+      final memory = DriftMemory.open(path: dbPath);
+      final base = DateTime.utc(2026, 1, 1, 8, 0, 0);
+      final recent = MemorySummary(
+        id: 'recent-1',
+        text: 'Recent summary',
+        sourceIds: const ['item-1', 'item-2'],
+        sourceStartAt: base,
+        sourceEndAt: base.add(const Duration(minutes: 10)),
+        updatedAt: base.add(const Duration(minutes: 11)),
+        bucket: MemorySummaryBucket.recent,
+      );
+      final week = MemorySummary(
+        id: 'week-1',
+        text: 'Week summary',
+        sourceIds: const ['item-3'],
+        sourceStartAt: base.subtract(const Duration(days: 2)),
+        sourceEndAt: base.subtract(const Duration(days: 1)),
+        updatedAt: base.add(const Duration(minutes: 12)),
+        bucket: MemorySummaryBucket.week,
       );
 
-      final records = await memory.listRecords(
-        scope: 'scope-a',
-        type: shortTermMemoryType,
-        includeSummaries: true,
+      await memory.saveMemorySummaries(MemorySummaryBucket.recent, [recent]);
+      await memory.saveMemorySummaries(MemorySummaryBucket.week, [week]);
+
+      final page = await memory.listMemorySummaries(offset: 1, limit: 1);
+      expect(page, hasLength(1));
+      expect(page.single.id, 'recent-1');
+
+      await memory.deleteMemorySummary('recent-1');
+      final allItems = await memory.listMemorySummaries(limit: 10);
+      expect(allItems.map((summary) => summary.id), ['week-1']);
+      final remainingRecent = await memory.getMemorySummaries(
+        MemorySummaryBucket.recent,
       );
-      expect(records, hasLength(2));
-      expect(records.map((record) => record.jobId), [
-        'job-short-3',
-        'job-short-4',
-      ]);
+      expect(remainingRecent, isEmpty);
     });
   });
 }

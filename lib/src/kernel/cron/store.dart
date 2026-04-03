@@ -1,4 +1,8 @@
-import 'package:hive/hive.dart';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:drift/drift.dart';
+import 'package:drift/native.dart';
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 
 import 'model.dart';
@@ -93,152 +97,289 @@ class InMemoryCronTaskStore implements CronTaskStore {
   }
 }
 
-class HiveCronTaskStore implements CronTaskStore {
-  final Box<Map> _taskBox;
-  final Box<Map> _runBox;
-  final Box<Map> _messageBox;
+class DriftCronTaskStore implements CronTaskStore {
+  final QueryExecutor _executor;
+  final _CronDbUser _user = _CronDbUser();
+  Future<void>? _openFuture;
 
-  HiveCronTaskStore({
-    required Box<Map> taskBox,
-    required Box<Map> runBox,
-    required Box<Map> messageBox,
-  }) : _taskBox = taskBox,
-       _runBox = runBox,
-       _messageBox = messageBox;
+  DriftCronTaskStore(this._executor);
+
+  factory DriftCronTaskStore.open({required String path}) {
+    return DriftCronTaskStore(_openConnection(path));
+  }
+
+  Future<void> _ensureOpen() {
+    _openFuture ??= () async {
+      await _executor.ensureOpen(_user);
+      await _user.ensureInitialized(_executor);
+    }();
+    return _openFuture!;
+  }
 
   @override
   Future<CronTaskDefinition> putTask(CronTaskDefinition task) async {
-    await _taskBox.put(task.cronId, _taskToMap(task));
+    await _ensureOpen();
+    await _executor.runCustom(
+      '''
+INSERT INTO cron_tasks (
+  cron_id,
+  name,
+  schedule,
+  source,
+  user_id,
+  session_id,
+  timezone,
+  concurrency,
+  spec_json,
+  created_at,
+  updated_at,
+  last_run_at,
+  next_run_at,
+  status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(cron_id) DO UPDATE SET
+  name = excluded.name,
+  schedule = excluded.schedule,
+  source = excluded.source,
+  user_id = excluded.user_id,
+  session_id = excluded.session_id,
+  timezone = excluded.timezone,
+  concurrency = excluded.concurrency,
+  spec_json = excluded.spec_json,
+  created_at = excluded.created_at,
+  updated_at = excluded.updated_at,
+  last_run_at = excluded.last_run_at,
+  next_run_at = excluded.next_run_at,
+  status = excluded.status;
+''',
+      [
+        task.cronId,
+        task.name,
+        task.schedule,
+        task.source,
+        task.userId,
+        task.sessionId,
+        task.timezone,
+        task.concurrency.name,
+        jsonEncode(_taskSpecToMap(task.spec)),
+        task.createdAt.millisecondsSinceEpoch,
+        task.updatedAt.millisecondsSinceEpoch,
+        task.lastRunAt?.millisecondsSinceEpoch,
+        task.nextRunAt?.millisecondsSinceEpoch,
+        task.status.name,
+      ],
+    );
     return task;
   }
 
   @override
   Future<CronTaskDefinition?> getTask(String cronId) async {
-    final value = _taskBox.get(cronId);
-    return _taskFromMap(value);
+    await _ensureOpen();
+    final rows = await _executor.runSelect(
+      '''
+SELECT *
+FROM cron_tasks
+WHERE cron_id = ?
+LIMIT 1;
+''',
+      [cronId],
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return _taskFromRow(rows.first);
   }
 
   @override
   Future<List<CronTaskDefinition>> listTasks() async {
-    final values = _taskBox.values
-        .map(_taskFromMap)
-        .whereType<CronTaskDefinition>()
-        .toList(growable: false);
-    values.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    return values;
+    await _ensureOpen();
+    final rows = await _executor.runSelect('''
+SELECT *
+FROM cron_tasks
+ORDER BY created_at ASC;
+''', const []);
+    return rows.map(_taskFromRow).toList(growable: false);
   }
 
   @override
   Future<void> deleteTask(String cronId) async {
-    await _taskBox.delete(cronId);
+    await _ensureOpen();
+    await _executor.runCustom('DELETE FROM cron_tasks WHERE cron_id = ?;', [
+      cronId,
+    ]);
   }
 
   @override
   Future<CronRunRecord> putRun(CronRunRecord run) async {
-    await _runBox.put(run.runId, _runToMap(run));
+    await _ensureOpen();
+    await _executor.runCustom(
+      '''
+INSERT INTO cron_runs (
+  run_id,
+  cron_id,
+  trigger,
+  scheduled_at,
+  started_at,
+  finished_at,
+  status,
+  llm_config_json,
+  liteagent_session_id,
+  error,
+  result_json,
+  display_message_id,
+  display_text
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(run_id) DO UPDATE SET
+  cron_id = excluded.cron_id,
+  trigger = excluded.trigger,
+  scheduled_at = excluded.scheduled_at,
+  started_at = excluded.started_at,
+  finished_at = excluded.finished_at,
+  status = excluded.status,
+  llm_config_json = excluded.llm_config_json,
+  liteagent_session_id = excluded.liteagent_session_id,
+  error = excluded.error,
+  result_json = excluded.result_json,
+  display_message_id = excluded.display_message_id,
+  display_text = excluded.display_text;
+''',
+      [
+        run.runId,
+        run.cronId,
+        run.trigger.name,
+        run.scheduledAt.millisecondsSinceEpoch,
+        run.startedAt.millisecondsSinceEpoch,
+        run.finishedAt?.millisecondsSinceEpoch,
+        run.status.name,
+        _encodeJson(_llmConfigToMap(run.llmConfig)),
+        run.liteAgentSessionId,
+        run.error,
+        _encodeJson(run.result),
+        run.displayMessageId,
+        run.displayText,
+      ],
+    );
     return run;
   }
 
   @override
   Future<CronRunRecord?> getRun(String runId) async {
-    final value = _runBox.get(runId);
-    return _runFromMap(value);
+    await _ensureOpen();
+    final rows = await _executor.runSelect(
+      '''
+SELECT *
+FROM cron_runs
+WHERE run_id = ?
+LIMIT 1;
+''',
+      [runId],
+    );
+    if (rows.isEmpty) {
+      return null;
+    }
+    return _runFromRow(rows.first);
   }
 
   @override
   Future<List<CronRunRecord>> listRuns({String? cronId}) async {
-    final values = _runBox.values
-        .map(_runFromMap)
-        .whereType<CronRunRecord>()
-        .where(
-          (run) => cronId == null || cronId.isEmpty || run.cronId == cronId,
-        )
-        .toList(growable: false);
-    values.sort((a, b) => b.startedAt.compareTo(a.startedAt));
-    return values;
+    await _ensureOpen();
+    final rows = await _executor.runSelect(
+      '''
+SELECT *
+FROM cron_runs
+WHERE (? IS NULL OR ? = '' OR cron_id = ?)
+ORDER BY started_at DESC;
+''',
+      [cronId, cronId, cronId],
+    );
+    return rows.map(_runFromRow).toList(growable: false);
   }
 
   @override
   Future<void> deleteRun(String runId) async {
-    await _runBox.delete(runId);
-    final messageIds = _messageBox.values
-        .map(_messageFromMap)
-        .whereType<CronRunMessageRecord>()
-        .where((message) => message.runId == runId)
-        .map((message) => message.messageId)
-        .toList(growable: false);
-    if (messageIds.isEmpty) {
-      return;
-    }
-    await _messageBox.deleteAll(messageIds);
+    await _ensureOpen();
+    await _executor.runCustom('DELETE FROM cron_runs WHERE run_id = ?;', [
+      runId,
+    ]);
+    await _executor.runCustom(
+      'DELETE FROM cron_run_messages WHERE run_id = ?;',
+      [runId],
+    );
   }
 
   @override
   Future<CronRunMessageRecord> putRunMessage(
     CronRunMessageRecord message,
   ) async {
-    await _messageBox.put(message.messageId, _messageToMap(message));
+    await _ensureOpen();
+    await _executor.runCustom(
+      '''
+INSERT INTO cron_run_messages (
+  message_id,
+  run_id,
+  cron_id,
+  timestamp,
+  message_json
+) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(message_id) DO UPDATE SET
+  run_id = excluded.run_id,
+  cron_id = excluded.cron_id,
+  timestamp = excluded.timestamp,
+  message_json = excluded.message_json;
+''',
+      [
+        message.messageId,
+        message.runId,
+        message.cronId,
+        message.timestamp.millisecondsSinceEpoch,
+        jsonEncode(message.message.toJson()),
+      ],
+    );
     return message;
   }
 
   @override
   Future<List<CronRunMessageRecord>> listRunMessages(String runId) async {
-    final values = _messageBox.values
-        .map(_messageFromMap)
-        .whereType<CronRunMessageRecord>()
-        .where((message) => message.runId == runId)
-        .toList(growable: false);
-    values.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    return values;
+    await _ensureOpen();
+    final rows = await _executor.runSelect(
+      '''
+SELECT *
+FROM cron_run_messages
+WHERE run_id = ?
+ORDER BY timestamp ASC;
+''',
+      [runId],
+    );
+    return rows.map(_messageFromRow).toList(growable: false);
   }
 
-  Map<String, dynamic> _taskToMap(CronTaskDefinition task) {
+  Map<String, dynamic> _taskSpecToMap(AgentCronSpec task) {
     return {
-      'cronId': task.cronId,
-      'name': task.name,
-      'schedule': task.schedule,
-      'source': task.source,
-      'userId': task.userId,
-      'sessionId': task.sessionId,
-      'timezone': task.timezone,
-      'concurrency': task.concurrency.name,
-      'spec': {
-        'systemPrompt': task.spec.systemPrompt,
-        'content': task.spec.content.map((item) => item.toJson()).toList(),
-        'timeoutSeconds': task.spec.timeoutSeconds,
-        'llmConfig': _llmConfigToMap(task.spec.llmConfig),
-        'skills': task.spec.skills,
-      },
-      'createdAt': task.createdAt.toIso8601String(),
-      'updatedAt': task.updatedAt.toIso8601String(),
-      'lastRunAt': task.lastRunAt?.toIso8601String(),
-      'nextRunAt': task.nextRunAt?.toIso8601String(),
-      'status': task.status.name,
+      'systemPrompt': task.systemPrompt,
+      'content': task.content.map((item) => item.toJson()).toList(),
+      'timeoutSeconds': task.timeoutSeconds,
+      'llmConfig': _llmConfigToMap(task.llmConfig),
+      'skills': task.skills,
     };
   }
 
-  CronTaskDefinition? _taskFromMap(Map<dynamic, dynamic>? value) {
-    if (value == null) {
-      return null;
-    }
-    final specMap = value['spec'];
-    if (specMap is! Map) {
-      return null;
-    }
+  CronTaskDefinition _taskFromRow(Map<String, Object?> row) {
+    final specMap = _decodeJsonMap(row['spec_json'] as String?) ?? const {};
     final contentList = (specMap['content'] as List<dynamic>? ?? const [])
         .whereType<Map>()
         .map((item) => Content.fromJson(Map<String, dynamic>.from(item)))
         .toList(growable: false);
     return CronTaskDefinition(
-      cronId: value['cronId'] as String,
-      name: value['name'] as String,
-      schedule: value['schedule'] as String,
-      source: value['source'] as String,
-      userId: value['userId'] as String?,
-      sessionId: value['sessionId'] as String?,
-      timezone: value['timezone'] as String?,
+      cronId: row['cron_id'] as String? ?? '',
+      name: row['name'] as String? ?? '',
+      schedule: row['schedule'] as String? ?? '',
+      source: row['source'] as String? ?? '',
+      userId: row['user_id'] as String?,
+      sessionId: row['session_id'] as String?,
+      timezone: row['timezone'] as String?,
       concurrency: CronTaskConcurrencyPolicy.values.byName(
-        value['concurrency'] as String,
+        row['concurrency'] as String? ??
+            CronTaskConcurrencyPolicy.skipIfRunning.name,
       ),
       spec: AgentCronSpec(
         systemPrompt: specMap['systemPrompt'] as String,
@@ -249,111 +390,86 @@ class HiveCronTaskStore implements CronTaskStore {
             ?.map((item) => item as String)
             .toList(growable: false),
       ),
-      createdAt: DateTime.parse(value['createdAt'] as String),
-      updatedAt: DateTime.parse(value['updatedAt'] as String),
-      lastRunAt: _parseDateTime(value['lastRunAt']),
-      nextRunAt: _parseDateTime(value['nextRunAt']),
-      status: CronTaskStatus.values.byName(value['status'] as String),
+      createdAt: _fromEpoch(row['created_at'] as int?),
+      updatedAt: _fromEpoch(row['updated_at'] as int?),
+      lastRunAt: _fromNullableEpoch(row['last_run_at'] as int?),
+      nextRunAt: _fromNullableEpoch(row['next_run_at'] as int?),
+      status: CronTaskStatus.values.byName(
+        row['status'] as String? ?? CronTaskStatus.active.name,
+      ),
     );
   }
 
-  Map<String, dynamic> _runToMap(CronRunRecord run) {
-    return {
-      'runId': run.runId,
-      'cronId': run.cronId,
-      'trigger': run.trigger.name,
-      'scheduledAt': run.scheduledAt.toIso8601String(),
-      'startedAt': run.startedAt.toIso8601String(),
-      'finishedAt': run.finishedAt?.toIso8601String(),
-      'status': run.status.name,
-      'llmConfig': _llmConfigToMap(run.llmConfig),
-      'liteAgentSessionId': run.liteAgentSessionId,
-      'error': run.error,
-      'result': run.result,
-      'displayMessageId': run.displayMessageId,
-      'displayText': run.displayText,
-    };
-  }
-
-  CronRunRecord? _runFromMap(Map<dynamic, dynamic>? value) {
-    if (value == null) {
-      return null;
-    }
+  CronRunRecord _runFromRow(Map<String, Object?> row) {
     return CronRunRecord(
-      runId: value['runId'] as String,
-      cronId: value['cronId'] as String,
-      trigger: value['trigger'] == null
+      runId: row['run_id'] as String? ?? '',
+      cronId: row['cron_id'] as String? ?? '',
+      trigger: row['trigger'] == null
           ? CronRunTrigger.schedule
-          : CronRunTrigger.values.byName(value['trigger'] as String),
-      scheduledAt: DateTime.parse(value['scheduledAt'] as String),
-      startedAt: DateTime.parse(value['startedAt'] as String),
-      finishedAt: _parseDateTime(value['finishedAt']),
-      status: CronRunStatus.values.byName(value['status'] as String),
-      llmConfig: _llmConfigFromMap(value['llmConfig']),
-      liteAgentSessionId: value['liteAgentSessionId'] as String?,
-      error: value['error'] as String?,
-      result: _asStringMap(value['result']),
-      displayMessageId: value['displayMessageId'] as String?,
-      displayText: value['displayText'] as String?,
+          : CronRunTrigger.values.byName(
+              row['trigger'] as String? ?? CronRunTrigger.schedule.name,
+            ),
+      scheduledAt: _fromEpoch(row['scheduled_at'] as int?),
+      startedAt: _fromEpoch(row['started_at'] as int?),
+      finishedAt: _fromNullableEpoch(row['finished_at'] as int?),
+      status: CronRunStatus.values.byName(
+        row['status'] as String? ?? CronRunStatus.running.name,
+      ),
+      llmConfig: _llmConfigFromMap(
+        _decodeJsonMap(row['llm_config_json'] as String?),
+      ),
+      liteAgentSessionId: row['liteagent_session_id'] as String?,
+      error: row['error'] as String?,
+      result: _decodeJsonMap(row['result_json'] as String?),
+      displayMessageId: row['display_message_id'] as String?,
+      displayText: row['display_text'] as String?,
     );
   }
 
-  Map<String, dynamic> _messageToMap(CronRunMessageRecord message) {
-    return {
-      'messageId': message.messageId,
-      'runId': message.runId,
-      'cronId': message.cronId,
-      'timestamp': message.timestamp.toIso8601String(),
-      'message': message.message.toJson(),
-    };
-  }
-
-  CronRunMessageRecord? _messageFromMap(Map<dynamic, dynamic>? value) {
-    if (value == null) {
-      return null;
-    }
-    final message = value['message'];
-    if (message is! Map) {
-      return null;
-    }
-    final normalized = _normalizeHiveJson(message);
-    if (normalized is! Map<String, dynamic>) {
-      return null;
-    }
+  CronRunMessageRecord _messageFromRow(Map<String, Object?> row) {
+    final normalized =
+        _decodeJsonMap(row['message_json'] as String?) ?? const {};
     return CronRunMessageRecord(
-      messageId: value['messageId'] as String,
-      runId: value['runId'] as String,
-      cronId: value['cronId'] as String,
-      timestamp: DateTime.parse(value['timestamp'] as String),
+      messageId: row['message_id'] as String? ?? '',
+      runId: row['run_id'] as String? ?? '',
+      cronId: row['cron_id'] as String? ?? '',
+      timestamp: _fromEpoch(row['timestamp'] as int?),
       message: AgentMessage.fromJson(normalized),
     );
   }
 
-  DateTime? _parseDateTime(Object? value) {
-    if (value is String && value.trim().isNotEmpty) {
-      return DateTime.parse(value);
+  DateTime _fromEpoch(int? value) {
+    return DateTime.fromMillisecondsSinceEpoch(value ?? 0);
+  }
+
+  DateTime? _fromNullableEpoch(int? value) {
+    if (value == null) {
+      return null;
     }
+    return DateTime.fromMillisecondsSinceEpoch(value);
+  }
+
+  Map<String, dynamic>? _decodeJsonMap(String? value) {
+    if (value == null || value.isEmpty) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {}
     return null;
   }
 
-  Map<String, dynamic>? _asStringMap(Object? value) {
-    if (value is Map) {
-      return Map<String, dynamic>.from(value);
+  String? _encodeJson(Object? value) {
+    if (value == null) {
+      return null;
     }
-    return null;
-  }
-
-  Object? _normalizeHiveJson(Object? value) {
-    if (value is Map) {
-      return value.map(
-        (key, nestedValue) =>
-            MapEntry(key.toString(), _normalizeHiveJson(nestedValue)),
-      );
-    }
-    if (value is List) {
-      return value.map(_normalizeHiveJson).toList(growable: false);
-    }
-    return value;
+    return jsonEncode(value);
   }
 
   Map<String, dynamic>? _llmConfigToMap(LLMConfig? config) {
@@ -384,4 +500,85 @@ class HiveCronTaskStore implements CronTaskStore {
       contextWindowSize: (value['contextWindowSize'] as num?)?.toInt(),
     );
   }
+}
+
+class _CronDbUser implements QueryExecutorUser {
+  Future<void>? _initFuture;
+
+  @override
+  int get schemaVersion => 1;
+
+  @override
+  Future<void> beforeOpen(
+    QueryExecutor executor,
+    OpeningDetails details,
+  ) async {}
+
+  Future<void> ensureInitialized(QueryExecutor executor) {
+    _initFuture ??= _createSchema(executor);
+    return _initFuture!;
+  }
+
+  Future<void> _createSchema(QueryExecutor executor) async {
+    await executor.runCustom('''
+CREATE TABLE IF NOT EXISTS cron_tasks (
+  cron_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  source TEXT NOT NULL,
+  user_id TEXT,
+  session_id TEXT,
+  timezone TEXT,
+  concurrency TEXT NOT NULL,
+  spec_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_run_at INTEGER,
+  next_run_at INTEGER,
+  status TEXT NOT NULL
+);
+''');
+    await executor.runCustom('''
+CREATE TABLE IF NOT EXISTS cron_runs (
+  run_id TEXT PRIMARY KEY,
+  cron_id TEXT NOT NULL,
+  trigger TEXT NOT NULL,
+  scheduled_at INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  status TEXT NOT NULL,
+  llm_config_json TEXT,
+  liteagent_session_id TEXT,
+  error TEXT,
+  result_json TEXT,
+  display_message_id TEXT,
+  display_text TEXT
+);
+''');
+    await executor.runCustom('''
+CREATE TABLE IF NOT EXISTS cron_run_messages (
+  message_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  cron_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  message_json TEXT NOT NULL
+);
+''');
+    await executor.runCustom('''
+CREATE INDEX IF NOT EXISTS cron_runs_cron_id_started_at
+  ON cron_runs (cron_id, started_at);
+''');
+    await executor.runCustom('''
+CREATE INDEX IF NOT EXISTS cron_run_messages_run_id_timestamp
+  ON cron_run_messages (run_id, timestamp);
+''');
+  }
+}
+
+QueryExecutor _openConnection(String path) {
+  return LazyDatabase(() async {
+    final file = File(path);
+    await file.parent.create(recursive: true);
+    return NativeDatabase(file);
+  });
 }

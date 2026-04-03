@@ -9,12 +9,11 @@ import '../agent/llm_queue.dart';
 import '../agent/liteagent_client.dart';
 import '../agent/model.dart';
 import '../content/content_normalizer.dart';
-import '../preference/model.dart';
-import '../preference/preference.dart';
-import 'learning.dart';
 import 'model.dart';
+import 'preference.dart';
+import 'preference_extractor.dart';
 
-class LiteAgentLearning implements Learning {
+class AgentPreferenceExtractor implements PreferenceExtractor {
   final LlmQueue llmQueue;
   final LiteAgentClient client;
   final Preference preference;
@@ -23,7 +22,7 @@ class LiteAgentLearning implements Learning {
   final String systemPrompt;
   final List<String>? skills;
 
-  LiteAgentLearning({
+  AgentPreferenceExtractor({
     required this.llmQueue,
     required this.client,
     required this.preference,
@@ -34,9 +33,9 @@ class LiteAgentLearning implements Learning {
   });
 
   @override
-  Future<void> consume(LearningRecord record) async {
+  Future<List<PreferenceEntry>> consume(PreferenceSourceRecord record) async {
     if (record.userId == null || record.userId!.trim().isEmpty) {
-      return;
+      return const [];
     }
     final effectiveConfig = normalizeLlmConfigForLiteAgent(
       llmConfigResolver?.call() ?? llmConfig,
@@ -48,9 +47,9 @@ class LiteAgentLearning implements Learning {
     );
     final taskContent = _buildTaskContent(record, effectiveConfig);
     try {
-      final signal = await llmQueue.enqueue(
-        purpose: 'learning',
-        priority: 5,
+      final preferences = await llmQueue.enqueue(
+        purpose: 'preference_extraction',
+        priority: 9,
         weight: 1,
         modelKey: modelKey,
         jobId: record.jobId,
@@ -60,25 +59,22 @@ class LiteAgentLearning implements Learning {
             llmConfig: effectiveConfig,
             systemPrompt: systemPrompt,
             skills: skills,
-            callbackOpenTool: CallbackOpenTool(
-              opentool: _learningToolSpecJson(),
-            ),
+            callbackOpenTool: CallbackOpenTool(opentool: _toolSpecJson()),
           );
           final session = await sdk.initSession(capability: capability);
           final task = UserTask(content: taskContent, isChunk: true);
-          final completer = Completer<PreferenceSignal?>();
-          final handler = _LearningToolHandler(
-            record: record,
+          final completer = Completer<List<String>>();
+          final handler = _PreferenceExtractionToolHandler(
             onFirstToken: context.markFirstToken,
             onMessageCallback: (message) => _recordTokenUsage(message, context),
-            onSignal: (signal) {
+            onPreferences: (items) {
               if (!completer.isCompleted) {
-                completer.complete(signal);
+                completer.complete(items);
               }
             },
             onDoneCallback: () {
               if (!completer.isCompleted) {
-                completer.complete(null);
+                completer.complete(const []);
               }
             },
           );
@@ -86,16 +82,23 @@ class LiteAgentLearning implements Learning {
           return completer.future;
         },
       );
-      if (signal == null) {
-        return;
+      if (preferences.isEmpty) {
+        return const [];
       }
-      await preference.recordSignal(signal);
+      return preference.addTexts(
+        userId: record.userId!.trim(),
+        texts: preferences,
+        updatedAt: record.timestamp,
+      );
     } catch (_) {
-      return;
+      return const [];
     }
   }
 
-  List<Content> _buildTaskContent(LearningRecord record, LLMConfig llmConfig) {
+  List<Content> _buildTaskContent(
+    PreferenceSourceRecord record,
+    LLMConfig llmConfig,
+  ) {
     final normalizedData = normalizeStructuredDataForModel(
       record.data,
       llmConfig,
@@ -103,9 +106,9 @@ class LiteAgentLearning implements Learning {
     final content = contentFromStructuredData(record.data, llmConfig);
     final extraData = omitStructuredContent(normalizedData);
     final intro = StringBuffer();
-    intro.writeln('You extract user preference signals.');
-    intro.writeln('Call emit_preference with text/metadata.');
-    intro.writeln('If no preference signal, call reject_preference.');
+    intro.writeln('You extract stable user preferences.');
+    intro.writeln('Call generate_preference with a text array.');
+    intro.writeln('If no stable preference exists, return an empty array.');
     intro.writeln('Event type: ${record.type}');
     final taskContent = <Content>[
       Content(type: ContentType.text, message: intro.toString()),
@@ -133,42 +136,27 @@ class LiteAgentLearning implements Learning {
     return taskContent;
   }
 
-  String _learningToolSpecJson() {
+  String _toolSpecJson() {
     final spec = {
       'opentool': '1.1.0',
       'info': {
-        'title': 'Kernel Learning Tools',
-        'description': 'Emit preference signals for learning.',
+        'title': 'Kernel Preference Extraction Tools',
+        'description': 'Emit preference signals from source records.',
         'version': '1.0.0',
       },
       'functions': [
         {
-          'name': 'emit_preference',
-          'description': 'Emit a preference signal for the user.',
+          'name': 'generate_preference',
+          'description': 'Generate durable preference texts for the user.',
           'parameters': [
             {
               'name': 'text',
-              'description': 'Preference text to store.',
+              'description': 'Preference texts to store.',
               'required': true,
-              'schema': {'type': 'string'},
-            },
-            {
-              'name': 'metadata',
-              'description': 'Optional metadata payload.',
-              'required': false,
-              'schema': {'type': 'object', 'properties': {}},
-            },
-          ],
-        },
-        {
-          'name': 'reject_preference',
-          'description': 'Reject emitting a preference signal.',
-          'parameters': [
-            {
-              'name': 'reason',
-              'description': 'Reason for rejecting.',
-              'required': false,
-              'schema': {'type': 'string'},
+              'schema': {
+                'type': 'array',
+                'items': {'type': 'string'},
+              },
             },
           ],
         },
@@ -190,18 +178,16 @@ void _recordTokenUsage(AgentMessage message, LlmCallContext context) {
   }
 }
 
-class _LearningToolHandler extends AgentMessageHandler {
-  final LearningRecord record;
+class _PreferenceExtractionToolHandler extends AgentMessageHandler {
   final void Function() onFirstToken;
   final void Function(AgentMessage message) onMessageCallback;
-  final void Function(PreferenceSignal? signal) onSignal;
+  final void Function(List<String> items) onPreferences;
   final void Function() onDoneCallback;
 
-  _LearningToolHandler({
-    required this.record,
+  _PreferenceExtractionToolHandler({
     required this.onFirstToken,
     required this.onMessageCallback,
-    required this.onSignal,
+    required this.onPreferences,
     required this.onDoneCallback,
   });
 
@@ -213,21 +199,8 @@ class _LearningToolHandler extends AgentMessageHandler {
     onFirstToken();
     final args = Map<String, dynamic>.from(functionCall.arguments);
     switch (functionCall.name) {
-      case 'emit_preference':
-        final signal = _buildSignal(args);
-        if (signal != null) {
-          onSignal(signal);
-          return ToolReturn(
-            id: functionCall.id,
-            result: {'status': 'accepted'},
-          );
-        }
-        return ToolReturn(
-          id: functionCall.id,
-          result: {'status': 'error', 'message': 'Invalid preference payload.'},
-        );
-      case 'reject_preference':
-        onSignal(null);
+      case 'generate_preference':
+        onPreferences(_buildPreferences(args));
         return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
       default:
         return ToolReturn(
@@ -258,19 +231,18 @@ class _LearningToolHandler extends AgentMessageHandler {
 
   @override
   Future<void> onError(Exception e) async {
-    onDoneCallback();
+    onPreferences(const []);
   }
 
-  PreferenceSignal? _buildSignal(Map<String, dynamic> args) {
+  List<String> _buildPreferences(Map<String, dynamic> args) {
     final text = args['text'];
-    if (text is! String || text.trim().isEmpty) {
-      return null;
+    if (text is! List) {
+      return const [];
     }
-    final metadata = args['metadata'];
-    return PreferenceSignal(
-      userId: record.userId ?? 'unknown',
-      text: text,
-      metadata: metadata is Map<String, dynamic> ? metadata : null,
-    );
+    return text
+        .whereType<String>()
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
   }
 }

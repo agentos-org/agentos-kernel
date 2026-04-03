@@ -1,162 +1,138 @@
 import 'dart:io';
 
-import 'package:agentos_kernel/src/kernel/preference/hive_preference.dart';
-import 'package:agentos_kernel/src/kernel/preference/aggregating_preference.dart';
-import 'package:agentos_kernel/src/kernel/preference/preference.dart';
+import 'package:agentos_kernel/src/kernel/preference/drift_preference.dart';
 import 'package:agentos_kernel/src/kernel/preference/model.dart';
+import 'package:agentos_kernel/src/kernel/preference/preference.dart';
 import 'package:agentos_kernel/src/kernel/preference/vector_store.dart';
-import 'package:hive/hive.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('Preference storage', () {
-    test('lists signals and saves preferences separately', () async {
+  group('InMemoryPreference', () {
+    test('dedupes exact text and refreshes updatedAt', () async {
       final preference = InMemoryPreference();
+      final first = DateTime(2026, 4, 3, 10, 0, 0);
+      final second = DateTime(2026, 4, 3, 11, 0, 0);
 
-      await preference.recordSignal(
-        PreferenceSignal(
-          userId: 'u1',
-          text: 'Prefer concise replies',
-          metadata: const {'preferenceKey': 'responseStyle'},
-        ),
+      await preference.addTexts(
+        userId: 'u1',
+        texts: const ['Prefer concise replies'],
+        updatedAt: first,
       );
-      await preference.savePreferences(const {
-        'responseStyle': 'concise',
-      }, userId: 'u1');
+      await preference.addTexts(
+        userId: 'u1',
+        texts: const ['Prefer concise replies'],
+        updatedAt: second,
+      );
 
-      final signals = await preference.listSignals(userId: 'u1');
-      final preferences = await preference.listPreferences(userId: 'u1');
-
-      expect(signals, hasLength(1));
-      expect(signals.single.text, 'Prefer concise replies');
-      expect(preferences, {'responseStyle': 'concise'});
+      final items = await preference.listPreferences(userId: 'u1');
+      expect(items, hasLength(1));
+      expect(items.single.text, 'Prefer concise replies');
+      expect(items.single.updatedAt, second);
     });
 
-    test(
-      'aggregating wrapper marks user dirty after recording signal',
-      () async {
-        final preference = InMemoryPreference();
-        String? dirtyUserId;
-        final aggregating = AggregatingPreference(
-          delegate: preference,
-          onSignalRecorded: (userId) {
-            dirtyUserId = userId;
-          },
-        );
+    test('deletes by id', () async {
+      final preference = InMemoryPreference();
+      await preference.addTexts(
+        userId: 'u1',
+        texts: const ['Use Chinese by default'],
+      );
 
-        await aggregating.recordSignal(
-          PreferenceSignal(userId: 'u1', text: 'Use Chinese by default'),
-        );
+      final items = await preference.listPreferences(userId: 'u1');
+      await preference.deletePreference(items.single.id, userId: 'u1');
 
-        expect(dirtyUserId, 'u1');
-      },
-    );
+      expect(await preference.listPreferences(userId: 'u1'), isEmpty);
+    });
   });
 
-  group('HivePreference.deletePreferenceKey', () {
-    test('removes associated signals and vector segments', () async {
+  group('DriftPreference', () {
+    test('persists preferences across reopen', () async {
       final tempDir = await Directory.systemTemp.createTemp(
-        'hive-preference-test-',
+        'drift-preference-test-',
       );
-      Hive.init(tempDir.path);
-      final box = await Hive.openBox<Map>('preferences');
+      final dbPath = '${tempDir.path}/preferences.sqlite';
       addTearDown(() async {
-        await box.close();
-        await Hive.deleteBoxFromDisk('preferences');
         await tempDir.delete(recursive: true);
       });
 
       final vectorStore = _FakeTextQueryVectorStore();
-      final preference = HivePreference(box: box, vectorStore: vectorStore);
-
-      await preference.recordSignal(
-        PreferenceSignal(
-          userId: 'u1',
-          text: 'Prefer concise replies',
-          metadata: const {'preferenceKey': 'responseStyle'},
-        ),
+      final first = DriftPreference.open(
+        path: dbPath,
+        vectorStore: vectorStore,
       );
-      await preference.recordSignal(
-        PreferenceSignal(
-          userId: 'u1',
-          text: 'Use Chinese by default',
-          metadata: const {
-            'preferenceKeys': ['language'],
-          },
-        ),
+      await first.addTexts(
+        userId: 'u1',
+        texts: const ['Prefer concise replies'],
+        updatedAt: DateTime(2026, 4, 3, 10, 0, 0),
       );
 
-      await box.put('u1', {
-        'preferences': {'responseStyle': 'concise', 'language': 'zh-CN'},
-        'signals': box.get('u1')?['signals'],
-      });
-
-      await preference.deletePreferenceKey('responseStyle', userId: 'u1');
-
-      final record = box.get('u1');
-      final preferences = Map<String, dynamic>.from(
-        (record?['preferences'] as Map?) ?? const {},
+      final second = DriftPreference.open(
+        path: dbPath,
+        vectorStore: vectorStore,
       );
-      final signals = (record?['signals'] as List?) ?? const [];
+      final items = await second.listPreferences(userId: 'u1');
 
-      expect(preferences.containsKey('responseStyle'), isFalse);
-      expect(preferences['language'], 'zh-CN');
-      expect(signals, hasLength(1));
-      expect(((signals.single as Map)['metadata'] as Map)['preferenceKeys'], [
-        'language',
-      ]);
-      expect(vectorStore.deletedIds, hasLength(1));
-      expect(vectorStore.deletedIds.single, vectorStore.upsertedIds.first);
+      expect(items, hasLength(1));
+      expect(items.single.text, 'Prefer concise replies');
     });
 
-    test('keeps multi-key signal until all linked keys are removed', () async {
+    test('deletes preference and removes vector segment', () async {
       final tempDir = await Directory.systemTemp.createTemp(
-        'hive-preference-test-',
+        'drift-preference-test-',
       );
-      Hive.init(tempDir.path);
-      final box = await Hive.openBox<Map>('preferences-multi');
+      final dbPath = '${tempDir.path}/preferences.sqlite';
       addTearDown(() async {
-        await box.close();
-        await Hive.deleteBoxFromDisk('preferences-multi');
         await tempDir.delete(recursive: true);
       });
 
       final vectorStore = _FakeTextQueryVectorStore();
-      final preference = HivePreference(box: box, vectorStore: vectorStore);
-
-      await preference.recordSignal(
-        PreferenceSignal(
-          userId: 'u1',
-          text: 'Use concise Chinese replies',
-          metadata: const {
-            'preferenceKeys': ['responseStyle', 'language'],
-          },
-        ),
+      final preference = DriftPreference.open(
+        path: dbPath,
+        vectorStore: vectorStore,
+      );
+      await preference.addTexts(
+        userId: 'u1',
+        texts: const ['Prefer concise replies'],
       );
 
-      await box.put('u1', {
-        'preferences': {'responseStyle': 'concise', 'language': 'zh-CN'},
-        'signals': box.get('u1')?['signals'],
-      });
+      final items = await preference.listPreferences(userId: 'u1');
+      await preference.deletePreference(items.single.id, userId: 'u1');
 
-      await preference.deletePreferenceKey('responseStyle', userId: 'u1');
-
-      var record = box.get('u1');
-      var signals = (record?['signals'] as List?) ?? const [];
-      expect(signals, hasLength(1));
-      expect(((signals.single as Map)['metadata'] as Map)['preferenceKeys'], [
-        'language',
-      ]);
-      expect(vectorStore.deletedIds, isEmpty);
-
-      await preference.deletePreferenceKey('language', userId: 'u1');
-
-      record = box.get('u1');
-      signals = (record?['signals'] as List?) ?? const [];
-      expect(signals, isEmpty);
+      expect(await preference.listPreferences(userId: 'u1'), isEmpty);
       expect(vectorStore.deletedIds, hasLength(1));
       expect(vectorStore.deletedIds.single, vectorStore.upsertedIds.single);
     });
+
+    test('clear removes all preferences and vector segments', () async {
+      final tempDir = await Directory.systemTemp.createTemp(
+        'drift-preference-test-',
+      );
+      final dbPath = '${tempDir.path}/preferences.sqlite';
+      addTearDown(() async {
+        await tempDir.delete(recursive: true);
+      });
+
+      final vectorStore = _FakeTextQueryVectorStore();
+      final preference = DriftPreference.open(
+        path: dbPath,
+        vectorStore: vectorStore,
+      );
+      await preference.addTexts(
+        userId: 'u1',
+        texts: const ['Prefer concise replies', 'Use Chinese by default'],
+      );
+
+      await preference.clear(userId: 'u1');
+
+      expect(await preference.listPreferences(userId: 'u1'), isEmpty);
+      expect(vectorStore.deletedIds, hasLength(2));
+    });
+  });
+
+  test('normalizes preference text for exact dedupe', () {
+    expect(
+      normalizePreferenceText('  Prefer   concise  replies  '),
+      'prefer concise replies',
+    );
   });
 }
 

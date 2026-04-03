@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import '../events.dart';
 import '../logging/logger.dart';
+import '../logging/log_event.dart';
 import '../supervision/supervision.dart';
 import 'model.dart';
 
@@ -42,7 +42,7 @@ class LlmQueue {
     _pending.add(item);
     supervision.onLlmEnqueued(meta);
     logger?.log(
-      _LlmQueueEvent('LLM_QUEUED', meta, timestamp: meta.enqueuedAt),
+      _LlmQueueLogEvent('LLM_QUEUED', meta, timestamp: meta.enqueuedAt),
       data: {
         'priority': priority,
         'weight': weight,
@@ -138,7 +138,7 @@ class LlmQueue {
     );
     supervision.onLlmStarted(item.meta);
     logger?.log(
-      _LlmQueueEvent('LLM_STARTED', item.meta, timestamp: startedAt),
+      _LlmQueueLogEvent('LLM_STARTED', item.meta, timestamp: startedAt),
       data: {
         'purpose': item.meta.purpose,
         'priority': item.meta.priority,
@@ -157,7 +157,7 @@ class LlmQueue {
         );
         supervision.onLlmCompleted(metrics);
         logger?.log(
-          _LlmQueueEvent('LLM_DONE', item.meta, timestamp: metrics.doneAt),
+          _LlmQueueLogEvent('LLM_DONE', item.meta, timestamp: metrics.doneAt),
           data: {
             'purpose': item.meta.purpose,
             'priority': item.meta.priority,
@@ -177,7 +177,7 @@ class LlmQueue {
         );
         supervision.onLlmCompleted(metrics);
         logger?.log(
-          _LlmQueueEvent('LLM_FAILED', item.meta, timestamp: metrics.doneAt),
+          _LlmQueueLogEvent('LLM_FAILED', item.meta, timestamp: metrics.doneAt),
           data: {
             'purpose': item.meta.purpose,
             'priority': item.meta.priority,
@@ -265,11 +265,11 @@ class _LlmQueueItem<T> {
   }) : order = meta.enqueuedAt.microsecondsSinceEpoch;
 }
 
-class _LlmQueueEvent extends KernelEvent {
-  _LlmQueueEvent(String type, LlmRequestMeta meta, {DateTime? timestamp})
+class _LlmQueueLogEvent extends KernelLogEvent {
+  _LlmQueueLogEvent(String type, LlmRequestMeta meta, {DateTime? timestamp})
     : super(
         type: type,
-        jobId: meta.jobId ?? meta.id,
+        requestId: meta.id,
         userId: meta.userId,
         sessionId: null,
         source: 'llm_queue',

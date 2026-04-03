@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:agentos_kernel/src/kernel/cron/daemon_open_spec_provider.dart';
-import 'package:agentos_kernel/src/kernel/cron/liteagent_executor.dart';
+import 'package:agentos_kernel/src/kernel/cron/agent_executor.dart';
 import 'package:agentos_kernel/src/kernel/cron/model.dart';
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import 'package:opentool_daemon/opentool_daemon_client.dart';
@@ -22,7 +22,7 @@ void main() {
         responseText: 'new-response',
       );
       var currentSdk = oldSdk;
-      final executor = LiteAgentCronExecutor(
+      final executor = AgentCronExecutor(
         sdkResolver: () => currentSdk,
         llmConfigResolver: () => LLMConfig(
           baseUrl: 'http://127.0.0.1:9000',
@@ -76,7 +76,7 @@ void main() {
         sessionId: 'override-session',
         responseText: 'override-response',
       );
-      final executor = LiteAgentCronExecutor(
+      final executor = AgentCronExecutor(
         sdk: sdk,
         llmConfigResolver: () => LLMConfig(
           baseUrl: 'http://127.0.0.1:9000',
@@ -129,7 +129,7 @@ void main() {
         sessionId: 'debug-session',
         responseText: 'debug-response',
       );
-      final executor = LiteAgentCronExecutor(
+      final executor = AgentCronExecutor(
         sdk: sdk,
         llmConfigResolver: () => LLMConfig(
           baseUrl: 'http://127.0.0.1:9000',
@@ -249,7 +249,7 @@ void main() {
             ),
           ],
         );
-        final executor = LiteAgentCronExecutor(
+        final executor = AgentCronExecutor(
           sdk: sdk,
           llmConfigResolver: () => LLMConfig(
             baseUrl: 'http://127.0.0.1:9000',
@@ -325,7 +325,7 @@ void main() {
             ],
           ],
         );
-        final executor = LiteAgentCronExecutor(
+        final executor = AgentCronExecutor(
           sdk: sdk,
           llmConfigResolver: () => LLMConfig(
             baseUrl: 'http://127.0.0.1:9000',
@@ -368,7 +368,7 @@ void main() {
       () async {
         final sdk = _StreamFunctionLiteAgentSdk(sessionId: 'stream-session');
         final daemonClient = _RecordingModeAwareDaemonClient();
-        final executor = LiteAgentCronExecutor(
+        final executor = AgentCronExecutor(
           sdk: sdk,
           llmConfigResolver: () => LLMConfig(
             baseUrl: 'http://127.0.0.1:9000',
@@ -437,7 +437,7 @@ void main() {
         sessionId: 'fallback-session',
         responseText: 'fallback-response',
       );
-      final executor = LiteAgentCronExecutor(
+      final executor = AgentCronExecutor(
         sdk: sdk,
         llmConfigResolver: () => LLMConfig(
           baseUrl: 'http://127.0.0.1:9000',

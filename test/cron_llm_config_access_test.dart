@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:agentos_kernel/src/kernel/agent/config.dart';
 import 'package:agentos_kernel/src/kernel/agent/model.dart';
 import 'package:agentos_kernel/src/kernel/cron/llm_config_access.dart';
-import 'package:agentos_kernel/src/kernel/cron/liteagent_executor.dart';
+import 'package:agentos_kernel/src/kernel/cron/agent_executor.dart';
 import 'package:agentos_kernel/src/kernel/cron/model.dart';
 import 'package:agentos_kernel/src/kernel/supervision/supervision.dart';
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
@@ -25,7 +25,7 @@ void main() {
         purpose: 'cron',
       );
       final sdk = _FakeLiteAgentSdk();
-      final executor = LiteAgentCronExecutor(
+      final executor = AgentCronExecutor(
         sdk: sdk,
         llmConfigResolver: access.resolve,
         llmConfigListResolver: access.resolveAll,

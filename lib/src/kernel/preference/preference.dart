@@ -1,178 +1,116 @@
 import 'model.dart';
 
 abstract class Preference {
-  Future<PreferenceSnapshot> getSnapshot({String? userId});
-  Future<void> recordSignal(PreferenceSignal signal);
-  Future<List<PreferenceSignal>> listSignals({String? userId});
-  Future<Map<String, dynamic>> listPreferences({String? userId});
-  Future<void> savePreferences(
-    Map<String, dynamic> preferences, {
-    String? userId,
+  Future<List<PreferenceEntry>> addTexts({
+    required String userId,
+    required List<String> texts,
+    DateTime? updatedAt,
   });
-  Future<void> deletePreferenceKey(String key, {String? userId});
+
+  Future<List<PreferenceEntry>> listPreferences({
+    String? userId,
+    int offset = 0,
+    int limit = 50,
+  });
+
+  Future<void> deletePreference(String id, {String? userId});
+
+  Future<void> clear({String? userId});
+
+  Future<void> syncIndexes({String? userId});
 }
 
-class InMemoryPreference extends Preference {
-  final Map<String, Map<String, dynamic>> _preferences = {};
+class InMemoryPreference implements Preference {
+  final Map<String, List<PreferenceEntry>> _preferences = {};
 
   @override
-  Future<PreferenceSnapshot> getSnapshot({String? userId}) async {
-    return PreferenceSnapshot(
-      userId: userId,
-      preferences: userId == null ? const {} : _preferences[userId] ?? const {},
-    );
-  }
-
-  @override
-  Future<void> recordSignal(PreferenceSignal signal) async {
-    final prefs = _preferences.putIfAbsent(
-      signal.userId,
-      () => <String, dynamic>{},
-    );
-    final signals =
-        (prefs['signals'] as List<dynamic>?)?.toList() ?? <dynamic>[];
-    signals.add({
-      'userId': signal.userId,
-      'text': signal.text,
-      'metadata': signal.metadata,
-      'timestamp': signal.timestamp,
-    });
-    prefs['signals'] = signals;
-    prefs.putIfAbsent('preferences', () => <String, dynamic>{});
-  }
-
-  @override
-  Future<List<PreferenceSignal>> listSignals({String? userId}) async {
-    if (userId == null) {
+  Future<List<PreferenceEntry>> addTexts({
+    required String userId,
+    required List<String> texts,
+    DateTime? updatedAt,
+  }) async {
+    final normalizedUserId = userId.trim();
+    if (normalizedUserId.isEmpty) {
       return const [];
     }
-    final prefs = _preferences[userId];
-    final signals = (prefs?['signals'] as List<dynamic>?) ?? const [];
-    return signals
-        .map(_signalFromStored)
-        .whereType<PreferenceSignal>()
-        .toList(growable: false);
-  }
-
-  @override
-  Future<Map<String, dynamic>> listPreferences({String? userId}) async {
-    if (userId == null) {
-      return const {};
-    }
-    final prefs = _preferences[userId];
-    return Map<String, dynamic>.from(
-      (prefs?['preferences'] as Map<String, dynamic>?) ?? const {},
+    final current = _preferences.putIfAbsent(
+      normalizedUserId,
+      () => <PreferenceEntry>[],
     );
+    final nextUpdatedAt = updatedAt ?? DateTime.now();
+    final changed = <PreferenceEntry>[];
+    for (final rawText in texts) {
+      final normalizedText = normalizePreferenceText(rawText);
+      if (normalizedText.isEmpty) {
+        continue;
+      }
+      final existingIndex = current.indexWhere(
+        (entry) => normalizePreferenceText(entry.text) == normalizedText,
+      );
+      if (existingIndex >= 0) {
+        final existing = current[existingIndex];
+        final updated = PreferenceEntry(
+          id: existing.id,
+          text: rawText.trim(),
+          updatedAt: nextUpdatedAt,
+        );
+        current[existingIndex] = updated;
+        changed.add(updated);
+        continue;
+      }
+      final created = PreferenceEntry(
+        id: buildPreferenceId(normalizedUserId, rawText, nextUpdatedAt),
+        text: rawText.trim(),
+        updatedAt: nextUpdatedAt,
+      );
+      current.add(created);
+      changed.add(created);
+    }
+    return changed;
   }
 
   @override
-  Future<void> savePreferences(
-    Map<String, dynamic> preferences, {
+  Future<List<PreferenceEntry>> listPreferences({
     String? userId,
+    int offset = 0,
+    int limit = 50,
   }) async {
-    if (userId == null) {
-      return;
+    if (userId == null || userId.trim().isEmpty) {
+      return const [];
     }
-    final prefs = _preferences.putIfAbsent(userId, () => <String, dynamic>{});
-    prefs['preferences'] = Map<String, dynamic>.from(preferences);
+    final current = (_preferences[userId.trim()] ?? const <PreferenceEntry>[])
+        .toList(growable: false);
+    current.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    if (offset >= current.length) {
+      return const [];
+    }
+    final paged = current.skip(offset);
+    if (limit <= 0) {
+      return paged.toList(growable: false);
+    }
+    return paged.take(limit).toList(growable: false);
   }
 
   @override
-  Future<void> deletePreferenceKey(String key, {String? userId}) async {
-    if (userId == null) {
+  Future<void> deletePreference(String id, {String? userId}) async {
+    if (userId == null || userId.trim().isEmpty || id.trim().isEmpty) {
       return;
     }
-    final prefs = _preferences[userId];
-    final storedPreferences = Map<String, dynamic>.from(
-      (prefs?['preferences'] as Map<String, dynamic>?) ?? const {},
-    );
-    storedPreferences.remove(key);
-    if (prefs != null) {
-      prefs['preferences'] = storedPreferences;
-    }
-    final signals = (prefs?['signals'] as List<dynamic>?)?.toList();
-    if (signals == null) {
+    final current = _preferences[userId.trim()];
+    if (current == null) {
       return;
     }
-    final updatedSignals = <dynamic>[];
-    for (final signal in signals) {
-      final updatedSignal = _removePreferenceKeyFromSignal(signal, key);
-      if (updatedSignal != null) {
-        updatedSignals.add(updatedSignal);
-      }
-    }
-    prefs!['signals'] = updatedSignals;
+    current.removeWhere((entry) => entry.id == id);
   }
 
-  Map<String, dynamic>? _removePreferenceKeyFromSignal(
-    Object? signal,
-    String key,
-  ) {
-    if (signal is! Map) {
-      return null;
+  @override
+  Future<void> clear({String? userId}) async {
+    if (userId == null || userId.trim().isEmpty) {
+      return;
     }
-    final signalMap = Map<String, dynamic>.from(signal);
-    final metadata = signalMap['metadata'];
-    if (metadata is! Map<String, dynamic>) {
-      return signalMap;
-    }
-    final nextMetadata = _removePreferenceKeyFromMetadata(metadata, key);
-    if (nextMetadata == null) {
-      return null;
-    }
-    signalMap['metadata'] = nextMetadata;
-    return signalMap;
+    _preferences.remove(userId.trim());
   }
 
-  Map<String, dynamic>? _removePreferenceKeyFromMetadata(
-    Map<String, dynamic> metadata,
-    String key,
-  ) {
-    final nextMetadata = Map<String, dynamic>.from(metadata);
-    final singleKey = nextMetadata['preferenceKey'];
-    if (singleKey is String && singleKey.trim() == key) {
-      nextMetadata.remove('preferenceKey');
-    }
-
-    final multipleKeys = nextMetadata['preferenceKeys'];
-    if (multipleKeys is List) {
-      final retainedKeys = multipleKeys
-          .whereType<String>()
-          .map((item) => item.trim())
-          .where((item) => item.isNotEmpty && item != key)
-          .toList(growable: false);
-      if (retainedKeys.isEmpty) {
-        nextMetadata.remove('preferenceKeys');
-      } else {
-        nextMetadata['preferenceKeys'] = retainedKeys;
-      }
-    }
-
-    if (preferenceSignalKeys(nextMetadata).isEmpty) {
-      return null;
-    }
-    return nextMetadata;
-  }
-
-  PreferenceSignal? _signalFromStored(Object? signal) {
-    if (signal is! Map) {
-      return null;
-    }
-    final userId = signal['userId'];
-    final text = signal['text'];
-    if (userId is! String || userId.trim().isEmpty) {
-      return null;
-    }
-    if (text is! String || text.trim().isEmpty) {
-      return null;
-    }
-    final metadata = signal['metadata'];
-    final timestamp = signal['timestamp'];
-    return PreferenceSignal(
-      userId: userId,
-      text: text,
-      metadata: metadata is Map<String, dynamic> ? metadata : null,
-      timestamp: timestamp is DateTime ? timestamp : null,
-    );
-  }
+  @override
+  Future<void> syncIndexes({String? userId}) async {}
 }

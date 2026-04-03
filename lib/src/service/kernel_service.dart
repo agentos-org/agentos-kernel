@@ -1,30 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:hive/hive.dart';
 import 'package:lite_embeddings_sdk_dart/lite_embeddings_sdk_dart.dart'
     as embeddings;
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import 'package:opentool_daemon/opentool_daemon_client.dart';
 import 'package:opentool_dart/opentool_client.dart';
 
-import '../kernel/execution/execution.dart';
-import '../kernel/execution/open_tool_directory.dart';
-import '../kernel/execution/app_called_tool.dart';
+import '../kernel/opentool/opentool_daemon_registry.dart';
 import '../kernel/cron/daemon_open_spec_provider.dart';
 import '../kernel/cron/llm_config_access.dart';
-import '../kernel/cron/liteagent_executor.dart';
+import '../kernel/cron/agent_executor.dart';
 import '../kernel/cron/model.dart';
 import '../kernel/cron/module.dart';
 import '../kernel/cron/store.dart';
-import '../kernel/job_manager.dart';
-import '../kernel/job_manager_hive.dart';
 import '../kernel/kernel.dart';
-import '../kernel/learning/deferred_learning.dart';
-import '../kernel/learning/liteagent_learning.dart';
-import '../kernel/learning/learning.dart';
-import '../kernel/learning/model.dart';
 import '../kernel/agent/liteagent_client.dart';
 import '../kernel/agent/llm_metrics.dart';
 import '../kernel/agent/llm_queue.dart';
@@ -32,26 +22,23 @@ import '../kernel/agent/config.dart';
 import '../kernel/agent/model.dart';
 import '../kernel/logging/logger.dart';
 import '../kernel/memory/drift_memory.dart';
+import '../kernel/memory/memory_pipeline.dart';
+import '../kernel/memory/memory_summary_indexer.dart';
 import '../kernel/memory/memory_summarizer.dart';
 import '../kernel/memory/model.dart';
-import '../kernel/perception/model.dart';
 import '../kernel/preference/model.dart';
-import '../kernel/perception/contextual_perception.dart';
-import '../kernel/perception/input.dart';
-import '../kernel/perception/liteagent_perception.dart';
-import '../kernel/perception/perception.dart';
-import '../kernel/perception/perception_agent_runner.dart';
-import '../kernel/planning/planning.dart';
-import '../kernel/preference/aggregating_preference.dart';
-import '../kernel/preference/hive_preference.dart';
-import '../kernel/preference/preference_aggregator.dart';
+import '../kernel/preference/drift_preference.dart';
 import '../kernel/preference/preference.dart';
+import '../kernel/preference/preference_extractor.dart';
+import '../kernel/preference/agent_preference_extractor.dart';
+import '../kernel/preference/preference_processor.dart';
 import '../kernel/preference/lite_embeddings_vector_store.dart';
 import '../kernel/preference/vector_store.dart';
 import '../kernel/supervision/model.dart';
 import '../kernel/supervision/model_profiler.dart';
 import '../kernel/supervision/supervision.dart';
 import 'dto.dart';
+import 'kernel_admin_service.dart';
 import 'model.dart';
 
 class LlmConfigGroup {
@@ -77,73 +64,41 @@ class EmbeddingsConfig {
 }
 
 class KernelRuntimeConfig {
-  final String hivePath;
   final String? memoryDbPath;
-  final String jobBoxName;
-  final String preferenceBoxName;
+  final String? preferenceDbPath;
+  final String? modelProfilerDbPath;
+  final String? cronDbPath;
   final Duration ttftThreshold;
   final double tpsThreshold;
   final int maxConcurrency;
-  final double maxPreferenceDistance;
-  final int vectorQueryLimit;
-  final int maxPreferenceResults;
-  final int memorySummaryLimit;
   final Duration memorySummaryRecentWindow;
   final int memorySummaryMaxRecords;
   final int memorySummaryMinRecords;
   final bool memorySummaryEnabled;
   final Duration memorySummaryInterval;
   final int memorySummaryMaxScopesPerRun;
-  final bool learningDeferredEnabled;
-  final Duration learningInterval;
-  final int learningMaxPerRun;
-  final int learningQueueLimit;
-  final bool preferenceAggregationEnabled;
-  final Duration preferenceAggregationInterval;
-  final int preferenceAggregationMaxPerRun;
-  final int preferenceAggregationQueueLimit;
   final String opentoolDaemonHost;
   final int opentoolDaemonPort;
   final KernelMode mode;
-  final String modelProfileBoxName;
-  final String cronTaskBoxName;
-  final String cronRunBoxName;
-  final String cronRunMessageBoxName;
   final double profileSuccessRateThreshold;
 
   const KernelRuntimeConfig({
-    this.hivePath = '.hive',
     this.memoryDbPath = '.hive/kernel_memory.sqlite',
-    this.jobBoxName = 'kernel_jobs',
-    this.preferenceBoxName = 'kernel_preference',
+    this.preferenceDbPath = '.hive/kernel_preference.sqlite',
+    this.modelProfilerDbPath = '.hive/kernel_model_profiles.sqlite',
+    this.cronDbPath = '.hive/kernel_cron.sqlite',
     this.ttftThreshold = const Duration(milliseconds: 5000),
     this.tpsThreshold = 5.0,
     this.maxConcurrency = 8,
-    this.maxPreferenceDistance = 0.35,
-    this.vectorQueryLimit = 5,
-    this.maxPreferenceResults = 3,
-    this.memorySummaryLimit = 5,
     this.memorySummaryRecentWindow = const Duration(hours: 24),
     this.memorySummaryMaxRecords = 200,
     this.memorySummaryMinRecords = 20,
     this.memorySummaryEnabled = true,
     this.memorySummaryInterval = const Duration(minutes: 5),
     this.memorySummaryMaxScopesPerRun = 1,
-    this.learningDeferredEnabled = true,
-    this.learningInterval = const Duration(minutes: 5),
-    this.learningMaxPerRun = 1,
-    this.learningQueueLimit = 500,
-    this.preferenceAggregationEnabled = true,
-    this.preferenceAggregationInterval = const Duration(minutes: 5),
-    this.preferenceAggregationMaxPerRun = 1,
-    this.preferenceAggregationQueueLimit = 500,
     this.opentoolDaemonHost = '127.0.0.1',
     this.opentoolDaemonPort = DAEMON_DEFAULT_PORT,
     this.mode = KernelMode.balanced,
-    this.modelProfileBoxName = 'kernel_model_profiles',
-    this.cronTaskBoxName = 'kernel_cron_tasks',
-    this.cronRunBoxName = 'kernel_cron_runs',
-    this.cronRunMessageBoxName = 'kernel_cron_run_messages',
     this.profileSuccessRateThreshold = 0.4,
   });
 }
@@ -152,7 +107,7 @@ class KernelServiceConfig {
   final LiteAgentSDK liteAgentSdk;
   final List<PresetOpenSpec>? presetOpenSpecList;
   final LlmConfigGroup? llm;
-  final List<String>? learningSkills;
+  final List<String>? preferenceSkills;
   final EmbeddingsConfig embeddings;
   final KernelRuntimeConfig runtime;
 
@@ -160,7 +115,7 @@ class KernelServiceConfig {
     required this.liteAgentSdk,
     this.presetOpenSpecList,
     this.llm,
-    this.learningSkills,
+    this.preferenceSkills,
     required this.embeddings,
     this.runtime = const KernelRuntimeConfig(),
   });
@@ -204,38 +159,28 @@ class DaemonPresetToolCandidate {
 
 typedef DaemonPresetFilter = bool Function(DaemonPresetToolCandidate candidate);
 
-class _LlmServiceDelegates {
-  final Perception perception;
-  final Planning planning;
-  final Learning learning;
+class _PreferenceExtractorDelegate {
+  final PreferenceExtractor preferenceExtractor;
 
-  const _LlmServiceDelegates({
-    required this.perception,
-    required this.planning,
-    required this.learning,
-  });
+  const _PreferenceExtractorDelegate({required this.preferenceExtractor});
 }
 
 class KernelService {
   final Kernel _kernel;
-  final PerceptionAgentRunner? _perceptionRunner;
   static const String _defaultUserId = 'default';
   LlmConfigPool? _llmConfigPool;
-  final SwitchablePerception? _perceptionSwitch;
-  final SwitchablePlanning? _planningSwitch;
-  final SwitchableLearning? _learningSwitch;
+  final SwitchablePreferenceExtractor? _preferenceExtractorSwitch;
   final LiteAgentClient? _liteAgentClient;
   final LlmQueue? _llmQueue;
-  final OpenToolDirectory? _openToolDirectory;
+  final OpenToolDaemonRegistry? _openToolDaemonRegistry;
   final KernelLogger? _logger;
   final DriftMemory? _driftMemory;
   final SwitchableTextQueryVectorStore? _preferenceVectorStore;
+  PreferenceProcessor? _preferenceProcessor;
+  MemorySummaryIndexer? _memorySummaryIndexer;
+  ExternalServiceHealthSubscription? _externalHealthSubscription;
   bool _memorySummarizerStarted;
-  bool _preferenceAggregatorStarted;
   MemorySummarizer? _memorySummarizer;
-  PreferenceAggregator? _preferenceAggregator;
-  final _JobSnapshotDispatcher _jobSnapshotDispatcher;
-  AppCalledTool? _appCalledTool;
   final KernelRuntimeConfig _runtimeConfig;
   String _opentoolDaemonHost;
   int _opentoolDaemonPort;
@@ -249,73 +194,64 @@ class KernelService {
   final CronModule? _cronModule;
   final CronDaemonOpenSpecProvider? _cronDaemonAccess;
   final CronLlmConfigAccess? _cronLlmConfigAccess;
-  final List<String>? _learningSkills;
+  final List<String>? _preferenceSkills;
 
   /// Wraps the kernel with a simplified API for external callers.
   factory KernelService(
     Kernel kernel, {
-    PerceptionAgentRunner? perceptionRunner,
     LlmConfigPool? llmConfigPool,
-    SwitchablePerception? perceptionSwitch,
-    SwitchablePlanning? planningSwitch,
-    SwitchableLearning? learningSwitch,
+    SwitchablePreferenceExtractor? preferenceExtractorSwitch,
     LiteAgentClient? liteAgentClient,
     LlmQueue? llmQueue,
-    OpenToolDirectory? openToolDirectory,
+    OpenToolDaemonRegistry? openToolDaemonRegistry,
     KernelLogger? logger,
     DriftMemory? driftMemory,
     SwitchableTextQueryVectorStore? preferenceVectorStore,
     bool memorySummarizerStarted = false,
-    bool preferenceAggregatorStarted = false,
     KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
     String? opentoolDaemonHost,
     int? opentoolDaemonPort,
     String embeddingsBaseUrl = '',
     ModelProfiler? modelProfiler,
     CronModule? cronModule,
-    List<String>? learningSkills,
+    List<String>? preferenceSkills,
+    MemorySummaryIndexer? memorySummaryIndexer,
+    PreferenceProcessor? preferenceProcessor,
   }) {
     return KernelService._internal(
       kernel,
-      perceptionRunner: perceptionRunner,
       llmConfigPool: llmConfigPool,
-      perceptionSwitch: perceptionSwitch,
-      planningSwitch: planningSwitch,
-      learningSwitch: learningSwitch,
+      preferenceExtractorSwitch: preferenceExtractorSwitch,
       liteAgentClient: liteAgentClient,
       llmQueue: llmQueue,
-      openToolDirectory: openToolDirectory,
+      openToolDaemonRegistry: openToolDaemonRegistry,
       logger: logger,
       driftMemory: driftMemory,
       preferenceVectorStore: preferenceVectorStore,
       memorySummarizerStarted: memorySummarizerStarted,
-      preferenceAggregatorStarted: preferenceAggregatorStarted,
       runtimeConfig: runtimeConfig,
       opentoolDaemonHost: opentoolDaemonHost,
       opentoolDaemonPort: opentoolDaemonPort,
       embeddingsBaseUrl: embeddingsBaseUrl,
       modelProfiler: modelProfiler,
       cronModule: cronModule,
-      learningSkills: learningSkills,
+      preferenceSkills: preferenceSkills,
+      memorySummaryIndexer: memorySummaryIndexer,
+      preferenceProcessor: preferenceProcessor,
     );
   }
 
   KernelService._internal(
     this._kernel, {
-    PerceptionAgentRunner? perceptionRunner,
     LlmConfigPool? llmConfigPool,
-    SwitchablePerception? perceptionSwitch,
-    SwitchablePlanning? planningSwitch,
-    SwitchableLearning? learningSwitch,
+    SwitchablePreferenceExtractor? preferenceExtractorSwitch,
     LiteAgentClient? liteAgentClient,
     LlmQueue? llmQueue,
-    OpenToolDirectory? openToolDirectory,
+    OpenToolDaemonRegistry? openToolDaemonRegistry,
     KernelLogger? logger,
     DriftMemory? driftMemory,
     SwitchableTextQueryVectorStore? preferenceVectorStore,
     bool memorySummarizerStarted = false,
-    bool preferenceAggregatorStarted = false,
-    _JobSnapshotDispatcher? jobSnapshotDispatcher,
     KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
     String? opentoolDaemonHost,
     int? opentoolDaemonPort,
@@ -324,22 +260,18 @@ class KernelService {
     CronModule? cronModule,
     CronDaemonOpenSpecProvider? cronDaemonAccess,
     CronLlmConfigAccess? cronLlmConfigAccess,
-    List<String>? learningSkills,
-  }) : _perceptionRunner = perceptionRunner,
-       _llmConfigPool = llmConfigPool,
-       _perceptionSwitch = perceptionSwitch,
-       _planningSwitch = planningSwitch,
-       _learningSwitch = learningSwitch,
+    List<String>? preferenceSkills,
+    MemorySummaryIndexer? memorySummaryIndexer,
+    PreferenceProcessor? preferenceProcessor,
+  }) : _llmConfigPool = llmConfigPool,
+       _preferenceExtractorSwitch = preferenceExtractorSwitch,
        _liteAgentClient = liteAgentClient,
        _llmQueue = llmQueue,
-       _openToolDirectory = openToolDirectory,
+       _openToolDaemonRegistry = openToolDaemonRegistry,
        _logger = logger,
        _driftMemory = driftMemory,
        _preferenceVectorStore = preferenceVectorStore,
        _memorySummarizerStarted = memorySummarizerStarted,
-       _preferenceAggregatorStarted = preferenceAggregatorStarted,
-       _jobSnapshotDispatcher =
-           jobSnapshotDispatcher ?? _JobSnapshotDispatcher(),
        _runtimeConfig = runtimeConfig,
        _opentoolDaemonHost =
            opentoolDaemonHost ?? runtimeConfig.opentoolDaemonHost,
@@ -351,11 +283,18 @@ class KernelService {
        _cronModule = cronModule,
        _cronDaemonAccess = cronDaemonAccess,
        _cronLlmConfigAccess = cronLlmConfigAccess,
-       _learningSkills = learningSkills;
+       _preferenceSkills = preferenceSkills,
+       _memorySummaryIndexer = memorySummaryIndexer,
+       _preferenceProcessor = preferenceProcessor;
 
   String get defaultUserId => _defaultUserId;
 
   String getCurrentUserId() => _defaultUserId;
+
+  KernelAdminService get admin => KernelAdminService(
+    _kernel,
+    triggerPreferenceExtraction: _triggerPreferenceExtractionInternal,
+  );
 
   KernelMode getMode() => _mode;
 
@@ -418,13 +357,14 @@ class KernelService {
       bearerToken: config.embeddings.apiKey,
     );
     TextQueryVectorStore embeddingsVectorStore;
+    embeddings.LLMConfig? embeddingsLlmConfig;
     if (llmModels.isNotEmpty) {
       try {
         final embeddingsModel = _resolveEmbeddingsLlmModel(
           llmModels,
           config.embeddings.llmModel,
         );
-        final embeddingsLlmConfig = embeddings.LLMConfig(
+        embeddingsLlmConfig = embeddings.LLMConfig(
           baseUrl: embeddingsModel.baseUrl,
           apiKey: embeddingsModel.apiKey ?? '',
           model: _resolveEmbeddingsModel(
@@ -444,98 +384,71 @@ class KernelService {
         );
       } catch (_) {
         embeddingsVectorStore = ThrowingTextQueryVectorStore();
+        embeddingsLlmConfig = null;
       }
     } else {
       embeddingsVectorStore = ThrowingTextQueryVectorStore();
     }
 
-    Hive.init(Directory(config.runtime.hivePath).path);
     final memoryDbPath = config.runtime.memoryDbPath;
     final resolvedMemoryDbPath =
         (memoryDbPath == null || memoryDbPath.trim().isEmpty)
         ? '.hive/kernel_memory.sqlite'
         : memoryDbPath.trim();
-    final jobBox = await Hive.openBox<Map>(config.runtime.jobBoxName);
-    final preferenceBox = await Hive.openBox<Map>(
-      config.runtime.preferenceBoxName,
+    final preferenceDbPath = config.runtime.preferenceDbPath;
+    final resolvedPreferenceDbPath =
+        (preferenceDbPath == null || preferenceDbPath.trim().isEmpty)
+        ? '.hive/kernel_preference.sqlite'
+        : preferenceDbPath.trim();
+    final modelProfilerDbPath = config.runtime.modelProfilerDbPath;
+    final resolvedModelProfilerDbPath =
+        (modelProfilerDbPath == null || modelProfilerDbPath.trim().isEmpty)
+        ? '.hive/kernel_model_profiles.sqlite'
+        : modelProfilerDbPath.trim();
+    final cronDbPath = config.runtime.cronDbPath;
+    final resolvedCronDbPath = (cronDbPath == null || cronDbPath.trim().isEmpty)
+        ? '.hive/kernel_cron.sqlite'
+        : cronDbPath.trim();
+    final modelProfiler = await ModelProfiler.open(
+      path: resolvedModelProfilerDbPath,
     );
-    final modelProfileBox = await Hive.openBox<Map>(
-      config.runtime.modelProfileBoxName,
-    );
-    final cronTaskBox = await Hive.openBox<Map>(config.runtime.cronTaskBoxName);
-    final cronRunBox = await Hive.openBox<Map>(config.runtime.cronRunBoxName);
-    final cronRunMessageBox = await Hive.openBox<Map>(
-      config.runtime.cronRunMessageBoxName,
-    );
-    final modelProfiler = ModelProfiler(box: modelProfileBox);
     supervision.setModelProfiler(modelProfiler);
 
-    final openToolDirectory = OpenToolDirectory();
+    final openToolDaemonRegistry = OpenToolDaemonRegistry();
 
     final vectorStore = SwitchableTextQueryVectorStore(embeddingsVectorStore);
-    final basePreference = HivePreference(
-      box: preferenceBox,
+    final preference = DriftPreference.open(
+      path: resolvedPreferenceDbPath,
       vectorStore: vectorStore,
+      isIndexingAvailable: () => _isEmbeddingsAvailable(supervision),
     );
-    final preference = AggregatingPreference(delegate: basePreference);
 
-    final perceptionDelegateSwitch = SwitchablePerception(ThrowingPerception());
-    final perception = ContextualPerception(
-      delegate: perceptionDelegateSwitch,
-      enrich: (input) async {
-        final text = input.text?.trim();
-        final targetUserId = input.userId;
-        if (text == null || text.isEmpty) {
-          return null;
-        }
-        if (targetUserId == null || targetUserId.trim().isEmpty) {
-          return null;
-        }
-        try {
-          final matches = await vectorStore.queryByText(
-            text,
-            limit: config.runtime.vectorQueryLimit,
-          );
-          final filtered = matches
-              .where(
-                (match) =>
-                    match.payload?['userId'] == targetUserId &&
-                    _isRelevantMatch(
-                      match,
-                      config.runtime.maxPreferenceDistance,
-                    ),
-              )
-              .toList();
-          if (filtered.isEmpty) {
-            return null;
-          }
-          filtered.sort((a, b) => b.score.compareTo(a.score));
-          return {
-            'retrievedPreference': filtered
-                .take(config.runtime.maxPreferenceResults)
-                .map(
-                  (match) => {'score': match.score, 'payload': match.payload},
-                )
-                .toList(),
-          };
-        } catch (_) {
-          return null;
-        }
-      },
+    final longTermMemory = DriftMemory.open(path: resolvedMemoryDbPath);
+    MemorySummarizer? memorySummarizer;
+    MemorySummaryIndexer? memorySummaryIndexer;
+    if (embeddingsLlmConfig != null) {
+      try {
+        final memorySummaryDocsId = await _ensureDocsId(
+          embeddingsClient,
+          _memorySummaryDocsName(config.embeddings.docsName),
+          embeddingsLlmConfig,
+        );
+        memorySummaryIndexer = MemorySummaryIndexer(
+          memory: longTermMemory,
+          client: embeddingsClient,
+          llmConfig: embeddingsLlmConfig,
+          docsId: memorySummaryDocsId,
+          logger: logger,
+        );
+      } catch (_) {
+        memorySummaryIndexer = null;
+      }
+    }
+    final preferenceExtractorSwitch = SwitchablePreferenceExtractor(
+      ThrowingPreferenceExtractor(),
     );
-    final jobSnapshotDispatcher = _JobSnapshotDispatcher();
-    final jobManager = _ObservableJobManager(
-      HiveJobManager(box: jobBox),
-      jobSnapshotDispatcher,
-    );
-    final longTermMemory = DriftMemory.open(
-      path: resolvedMemoryDbPath,
-      summaryLimit: config.runtime.memorySummaryLimit,
-    );
-    final learningSwitch = SwitchableLearning(ThrowingLearning());
-    final planningSwitch = SwitchablePlanning(ThrowingPlanning());
     if (llmConfig != null && llmConfigPool != null) {
-      final llmDelegates = _buildLlmServiceDelegates(
+      final preferenceExtractorDelegate = _buildPreferenceExtractor(
         llmQueue: llmQueue,
         client: liteAgentClient,
         llmConfig: llmConfig,
@@ -544,29 +457,29 @@ class KernelService {
         modelProfiler: modelProfiler,
         supervision: supervision,
         preference: preference,
-        openToolDirectory: openToolDirectory,
-        logger: logger,
         runtimeConfig: config.runtime,
-        learningSkills: config.learningSkills,
+        preferenceSkills: config.preferenceSkills,
       );
-      perceptionDelegateSwitch.delegate = llmDelegates.perception;
-      planningSwitch.delegate = llmDelegates.planning;
-      learningSwitch.delegate = llmDelegates.learning;
+      preferenceExtractorSwitch.delegate =
+          preferenceExtractorDelegate.preferenceExtractor;
     }
-    final kernel = _buildKernel(
-      perception: perception,
-      planning: planningSwitch,
-      openToolDirectory: openToolDirectory,
+    final memoryPipeline = MemoryPipeline(
+      memory: longTermMemory,
+      logger: logger,
+      isIndexingAvailable: () => _isEmbeddingsAvailable(supervision),
+      summarizer: memorySummarizer,
+      indexer: memorySummaryIndexer,
+    );
+    final kernel = Kernel(
+      openToolDaemonRegistry: openToolDaemonRegistry,
       supervision: supervision,
       memory: longTermMemory,
+      memoryPipeline: memoryPipeline,
       preference: preference,
-      learning: learningSwitch,
-      jobManager: jobManager,
-      logger: logger,
+      preferenceExtractor: preferenceExtractorSwitch,
     );
 
     var memorySummarizerStarted = false;
-    var preferenceAggregatorStarted = false;
     final cronDaemonAccess = CronDaemonOpenSpecProvider(
       host: config.runtime.opentoolDaemonHost,
       port: config.runtime.opentoolDaemonPort,
@@ -582,12 +495,8 @@ class KernelService {
       purpose: 'cron',
     );
     final cronModule = CronModule(
-      store: HiveCronTaskStore(
-        taskBox: cronTaskBox,
-        runBox: cronRunBox,
-        messageBox: cronRunMessageBox,
-      ),
-      executor: LiteAgentCronExecutor(
+      store: DriftCronTaskStore.open(path: resolvedCronDbPath),
+      executor: AgentCronExecutor(
         sdkResolver: () => liteAgentClient.sdk,
         logger: logger,
         llmConfigResolver: cronLlmConfigAccess.resolve,
@@ -597,8 +506,7 @@ class KernelService {
         daemonPort: config.runtime.opentoolDaemonPort,
       ),
     );
-    MemorySummarizer? memorySummarizer;
-    PreferenceAggregator? preferenceAggregator;
+    PreferenceProcessor? preferenceProcessor;
     if (config.runtime.memorySummaryEnabled &&
         llmConfig != null &&
         llmConfigPool != null) {
@@ -624,47 +532,26 @@ class KernelService {
         enabled: true,
       );
       memorySummarizerStarted = true;
+      memoryPipeline.summarizer = memorySummarizer;
     }
-    if (config.runtime.preferenceAggregationEnabled &&
-        llmConfig != null &&
-        llmConfigPool != null) {
-      preferenceAggregator = PreferenceAggregator(
-        preference: basePreference,
+    if (llmConfig != null && llmConfigPool != null) {
+      preferenceProcessor = PreferenceProcessor(
+        extractor: preferenceExtractorSwitch,
         llmQueue: llmQueue,
-        client: liteAgentClient,
-        llmConfig: llmConfig,
-        llmConfigResolver: _makeResolver(
-          pool: llmConfigPool,
-          purpose: 'preference_aggregation',
-          mode: () => config.runtime.mode,
-          profiler: modelProfiler,
-          supervision: supervision,
-          runtimeConfig: config.runtime,
-        ),
         logger: logger,
-        interval: config.runtime.preferenceAggregationInterval,
-        maxPerRun: config.runtime.preferenceAggregationMaxPerRun,
-        queueLimit: config.runtime.preferenceAggregationQueueLimit,
-        enabled: true,
       );
-      preference.onSignalRecorded = preferenceAggregator.markDirty;
-      preferenceAggregatorStarted = true;
     }
     final service = KernelService._internal(
       kernel,
       llmConfigPool: llmConfigPool,
-      perceptionSwitch: perceptionDelegateSwitch,
-      planningSwitch: planningSwitch,
-      learningSwitch: learningSwitch,
+      preferenceExtractorSwitch: preferenceExtractorSwitch,
       liteAgentClient: liteAgentClient,
       llmQueue: llmQueue,
-      openToolDirectory: openToolDirectory,
+      openToolDaemonRegistry: openToolDaemonRegistry,
       logger: logger,
       driftMemory: longTermMemory,
       preferenceVectorStore: vectorStore,
       memorySummarizerStarted: memorySummarizerStarted,
-      preferenceAggregatorStarted: preferenceAggregatorStarted,
-      jobSnapshotDispatcher: jobSnapshotDispatcher,
       runtimeConfig: config.runtime,
       opentoolDaemonHost: config.runtime.opentoolDaemonHost,
       opentoolDaemonPort: config.runtime.opentoolDaemonPort,
@@ -673,28 +560,46 @@ class KernelService {
       cronModule: cronModule,
       cronDaemonAccess: cronDaemonAccess,
       cronLlmConfigAccess: cronLlmConfigAccess,
-      learningSkills: config.learningSkills,
+      preferenceSkills: config.preferenceSkills,
+      memorySummaryIndexer: memorySummaryIndexer,
+      preferenceProcessor: preferenceProcessor,
     );
     service._memorySummarizer = memorySummarizer;
-    service._preferenceAggregator = preferenceAggregator;
+    service._kernel.memoryPipeline.summarizer = memorySummarizer;
+    service._kernel.memoryPipeline.indexer = memorySummaryIndexer;
+    service._externalHealthSubscription?.cancel();
+    service._externalHealthSubscription = service.onExternalServiceHealthChange(
+      (health) {
+        if (health.type != ExternalServiceType.embeddings ||
+            !health.available) {
+          return;
+        }
+        unawaited(service._syncEmbeddingsIndexes());
+      },
+    );
+    if (memorySummaryIndexer != null) {
+      unawaited(service._syncEmbeddingsIndexes());
+    }
     await cronModule.start();
     return service;
   }
 
-  ConfirmationListener subscribeConfirmation({
-    String? jobId,
-    required void Function(String jobId) onNeedsConfirmation,
-  }) {
-    return _jobSnapshotDispatcher.add(
-      jobId: jobId,
-      onNeedsConfirmation: (snapshot) {
-        if (snapshot.status != JobStatus.NEEDS_CONFIRMATION) {
-          return;
-        }
-        onNeedsConfirmation(snapshot.jobId);
-      },
-    );
-  }
+  // ConfirmationListener subscribeConfirmation({
+  //   String? jobId,
+  //   required void Function(String jobId) onNeedsConfirmation,
+  // }) {
+  //   // Planning-driven confirmation subscription is intentionally disabled.
+  //   // return _jobSnapshotDispatcher.add(
+  //   //   jobId: jobId,
+  //   //   onNeedsConfirmation: (snapshot) {
+  //   //     if (snapshot.status != JobStatus.NEEDS_CONFIRMATION) {
+  //   //       return;
+  //   //     }
+  //   //     onNeedsConfirmation(snapshot.jobId);
+  //   //   },
+  //   // );
+  //   throw StateError('Perception and planning flow is disabled.');
+  // }
 
   LlmMetrics createLlmMetrics({
     required String requestId,
@@ -718,43 +623,218 @@ class KernelService {
     return LlmMetrics(requestId, sink);
   }
 
-  @Deprecated(
-    'recordAgentMessage is deprecated and will be removed in a future release. '
-    'Use ingestAgentMessageForLearning() so agent messages also feed '
-    'preference learning.',
-  )
-  Future<void> recordAgentMessage({
-    required String userId,
-    required String bundleId,
-    required AgentMessage agentMessage,
+  Future<void> appendAgentMemoryMessage({
+    required String sessionId,
+    required String taskId,
+    required String actorId,
+    required AgentMemoryActorType actorType,
+    required List<String> content,
+    DateTime? timestamp,
   }) async {
-    final record = _buildExternalAgentMessageRecord(
-      userId: userId,
-      bundleId: bundleId,
-      agentMessage: agentMessage,
+    final driftMemory = _driftMemory;
+    if (driftMemory == null) {
+      throw StateError('DriftMemory is not managed by KernelService.');
+    }
+    await driftMemory.appendAgentMemoryMessage(
+      sessionId: sessionId,
+      taskId: taskId,
+      actorId: actorId,
+      actorType: actorType,
+      content: content,
+      timestamp: timestamp ?? DateTime.now(),
     );
-    await _kernel.memory.record(record);
+    _kernel.memoryPipeline.markDirty();
+    final actor = actorType.name;
+    if (actor == AgentMemoryActorType.user.name ||
+        actor == AgentMemoryActorType.app.name) {
+      _preferenceProcessor?.enqueue(
+        PreferenceSourceRecord(
+          jobId: taskId,
+          userId: _defaultUserId,
+          type: 'agent_memory',
+          data: {
+            'sessionId': sessionId,
+            'taskId': taskId,
+            'actorId': actorId,
+            'actorType': actorType.name,
+            'content': content,
+          },
+          timestamp: timestamp ?? DateTime.now(),
+        ),
+      );
+    }
   }
 
-  Future<void> ingestAgentMessageForLearning({
-    required String userId,
-    required String bundleId,
-    required AgentMessage agentMessage,
+  Future<List<MemorySummary>> retrieveRelevantMemorySummaries(
+    String instruction, {
+    int limit = 6,
+    int candidateLimit = 24,
   }) async {
-    final record = _buildExternalAgentMessageRecord(
-      userId: userId,
-      bundleId: bundleId,
-      agentMessage: agentMessage,
+    final query = instruction.trim();
+    if (query.isEmpty || limit <= 0) {
+      return const [];
+    }
+    if (!_isEmbeddingsAvailable(_kernel.supervision)) {
+      return const [];
+    }
+    final indexer = _memorySummaryIndexer;
+    final driftMemory = _driftMemory;
+    if (indexer == null || driftMemory == null) {
+      return const [];
+    }
+
+    final hits = await indexer.queryHits(query, limit: candidateLimit);
+    if (hits.isEmpty) {
+      return const [];
+    }
+
+    final summaries = await driftMemory.listMemorySummaries(limit: 0);
+    final summariesById = {for (final item in summaries) item.id: item};
+    final scored = <_ScoredMemorySummary>[];
+    final now = DateTime.now();
+    final seenTexts = <String>{};
+
+    for (final hit in hits) {
+      final summary = summariesById[hit.summaryId];
+      if (summary == null) {
+        continue;
+      }
+      final normalizedText = summary.text.trim().toLowerCase();
+      if (normalizedText.isEmpty || seenTexts.contains(normalizedText)) {
+        continue;
+      }
+      seenTexts.add(normalizedText);
+      scored.add(
+        _ScoredMemorySummary(
+          summary: summary,
+          finalScore: _memorySummaryFinalScore(
+            semanticScore: hit.score,
+            recencyScore: _memorySummaryRecencyScore(summary, now),
+            timeGroupBias: _memorySummaryTimeGroupBias(
+              hit.timeGroup ?? summary.bucket.name,
+            ),
+          ),
+          timeGroup: hit.timeGroup ?? summary.bucket.name,
+        ),
+      );
+    }
+
+    scored.sort((a, b) => b.finalScore.compareTo(a.finalScore));
+    final selected = <MemorySummary>[];
+    final quota = <String, int>{'near': 3, 'mid': 2, 'far': 1};
+
+    for (final item in scored) {
+      if (selected.length >= limit) {
+        break;
+      }
+      final family = _memorySummaryTimeFamily(item.timeGroup);
+      final remaining = quota[family] ?? 0;
+      if (remaining <= 0) {
+        continue;
+      }
+      quota[family] = remaining - 1;
+      selected.add(item.summary);
+    }
+
+    if (selected.length < limit) {
+      for (final item in scored) {
+        if (selected.length >= limit) {
+          break;
+        }
+        if (selected.any((summary) => summary.id == item.summary.id)) {
+          continue;
+        }
+        selected.add(item.summary);
+      }
+    }
+
+    return selected;
+  }
+
+  Future<List<PreferenceEntry>> retrieveRelevantPreferences(
+    String instruction, {
+    String? userId,
+    int limit = 3,
+    int candidateLimit = 12,
+  }) async {
+    final query = instruction.trim();
+    if (query.isEmpty || limit <= 0) {
+      return const [];
+    }
+    if (!_isEmbeddingsAvailable(_kernel.supervision)) {
+      return const [];
+    }
+    final vectorStore = _preferenceVectorStore;
+    if (vectorStore == null) {
+      return const [];
+    }
+    final targetUserId = (userId ?? _defaultUserId).trim();
+    final matches = await vectorStore.queryByText(query, limit: candidateLimit);
+    final scored = <_ScoredPreferenceEntry>[];
+    final seenIds = <String>{};
+    final now = DateTime.now();
+    for (final match in matches) {
+      final payload = match.payload;
+      final payloadUserId = payload?['userId'];
+      final id = payload?['id'];
+      final text = payload?['text'];
+      if (payloadUserId != targetUserId || id is! String || text is! String) {
+        continue;
+      }
+      if (!seenIds.add(id)) {
+        continue;
+      }
+      final updatedAt = DateTime.tryParse(
+        payload?['updatedAt'] as String? ?? '',
+      );
+      final entry = PreferenceEntry(
+        id: id,
+        text: text.trim(),
+        updatedAt: updatedAt ?? now,
+      );
+      scored.add(
+        _ScoredPreferenceEntry(
+          entry: entry,
+          finalScore:
+              match.score * 0.8 + _preferenceRecencyScore(entry, now) * 0.2,
+        ),
+      );
+    }
+    scored.sort((a, b) => b.finalScore.compareTo(a.finalScore));
+    return scored.take(limit).map((item) => item.entry).toList(growable: false);
+  }
+
+  Future<RelevantContext> retrieveRelevantContext(
+    String instruction, {
+    String? userId,
+    int memoryLimit = 6,
+    int memoryCandidateLimit = 24,
+    int preferenceLimit = 3,
+    int preferenceCandidateLimit = 12,
+  }) async {
+    final embeddingsAvailable = _isEmbeddingsAvailable(_kernel.supervision);
+    if (!embeddingsAvailable) {
+      return const RelevantContext(
+        embeddingsAvailable: false,
+        memorySummaries: [],
+        preferences: [],
+      );
+    }
+    final memorySummaries = await retrieveRelevantMemorySummaries(
+      instruction,
+      limit: memoryLimit,
+      candidateLimit: memoryCandidateLimit,
     );
-    await _kernel.memory.record(record);
-    await _kernel.learning.consume(
-      LearningRecord(
-        jobId: record.jobId,
-        userId: userId,
-        type: record.type,
-        data: record.data,
-        timestamp: record.timestamp,
-      ),
+    final preferences = await retrieveRelevantPreferences(
+      instruction,
+      userId: userId,
+      limit: preferenceLimit,
+      candidateLimit: preferenceCandidateLimit,
+    );
+    return RelevantContext(
+      embeddingsAvailable: true,
+      memorySummaries: memorySummaries,
+      preferences: preferences,
     );
   }
 
@@ -827,7 +907,7 @@ class KernelService {
       debounce: _openToolDaemonSyncDebounce,
       presetFilter: _openToolDaemonPresetFilter,
       setPresetOpenSpecList: setPresetOpenSpecList,
-      openToolDirectoryProvider: _resolveOpenToolDirectory,
+      openToolDaemonRegistryProvider: _resolveOpenToolDaemonRegistry,
       logger: _logger,
     );
     _openToolDaemonPresetSync = sync;
@@ -882,18 +962,14 @@ class KernelService {
   }
 
   void updateLlmServices() {
-    final perceptionSwitch = _perceptionSwitch;
-    final planningSwitch = _planningSwitch;
-    final learningSwitch = _learningSwitch;
+    final preferenceExtractorSwitch = _preferenceExtractorSwitch;
     final liteAgentClient = _liteAgentClient;
     final llmQueue = _llmQueue;
-    final openToolDirectory = _openToolDirectory;
-    if (perceptionSwitch == null ||
-        planningSwitch == null ||
-        learningSwitch == null ||
+    final openToolDaemonRegistry = _openToolDaemonRegistry;
+    if (preferenceExtractorSwitch == null ||
         liteAgentClient == null ||
         llmQueue == null ||
-        openToolDirectory == null) {
+        openToolDaemonRegistry == null) {
       throw StateError('LLM config is not managed by KernelService.');
     }
     final pool = _llmConfigPool;
@@ -903,7 +979,7 @@ class KernelService {
     final llmConfig = pool.pick();
     final supervision = _kernel.supervision;
     final profiler = _modelProfiler;
-    final llmDelegates = _buildLlmServiceDelegates(
+    final preferenceExtractorDelegate = _buildPreferenceExtractor(
       llmQueue: llmQueue,
       client: liteAgentClient,
       llmConfig: llmConfig,
@@ -912,14 +988,11 @@ class KernelService {
       modelProfiler: profiler,
       supervision: supervision,
       preference: _kernel.preference,
-      openToolDirectory: openToolDirectory,
-      logger: _logger,
       runtimeConfig: _runtimeConfig,
-      learningSkills: _learningSkills,
+      preferenceSkills: _preferenceSkills,
     );
-    perceptionSwitch.delegate = llmDelegates.perception;
-    planningSwitch.delegate = llmDelegates.planning;
-    learningSwitch.delegate = llmDelegates.learning;
+    preferenceExtractorSwitch.delegate =
+        preferenceExtractorDelegate.preferenceExtractor;
     if (_runtimeConfig.memorySummaryEnabled &&
         !_memorySummarizerStarted &&
         _driftMemory != null) {
@@ -945,37 +1018,13 @@ class KernelService {
         enabled: true,
       );
       _memorySummarizerStarted = true;
+      _kernel.memoryPipeline.summarizer = _memorySummarizer;
     }
-    if (_runtimeConfig.preferenceAggregationEnabled &&
-        !_preferenceAggregatorStarted) {
-      final preference = _kernel.preference;
-      if (preference is! AggregatingPreference) {
-        throw StateError(
-          'Preference aggregation requires AggregatingPreference wrapper.',
-        );
-      }
-      _preferenceAggregator = PreferenceAggregator(
-        preference: preference.delegate,
-        llmQueue: llmQueue,
-        client: liteAgentClient,
-        llmConfig: llmConfig,
-        llmConfigResolver: _makeResolver(
-          pool: pool,
-          purpose: 'preference_aggregation',
-          mode: () => _mode,
-          profiler: profiler,
-          supervision: supervision,
-          runtimeConfig: _runtimeConfig,
-        ),
-        logger: _logger,
-        interval: _runtimeConfig.preferenceAggregationInterval,
-        maxPerRun: _runtimeConfig.preferenceAggregationMaxPerRun,
-        queueLimit: _runtimeConfig.preferenceAggregationQueueLimit,
-        enabled: true,
-      );
-      preference.onSignalRecorded = _preferenceAggregator!.markDirty;
-      _preferenceAggregatorStarted = true;
-    }
+    _preferenceProcessor ??= PreferenceProcessor(
+      extractor: preferenceExtractorSwitch,
+      llmQueue: llmQueue,
+      logger: _logger,
+    );
   }
 
   Future<bool> updateEmbeddingsConfig(EmbeddingsConfig config) async {
@@ -987,12 +1036,16 @@ class KernelService {
     final pool = _llmConfigPool;
     if (pool == null || pool.configs.isEmpty) {
       vectorStore.delegate = ThrowingTextQueryVectorStore();
+      _memorySummaryIndexer = null;
+      _kernel.memoryPipeline.indexer = null;
       return false;
     }
 
     final candidate = _resolveEmbeddingsLlmConfig(config, pool);
     if (candidate == null) {
       vectorStore.delegate = ThrowingTextQueryVectorStore();
+      _memorySummaryIndexer = null;
+      _kernel.memoryPipeline.indexer = null;
       return false;
     }
 
@@ -1009,7 +1062,7 @@ class KernelService {
     try {
       final docsId = await _ensureDocsId(
         embeddingsClient,
-        config.docsName,
+        _preferenceDocsName(config.docsName),
         embeddingsLlmConfig,
       );
       vectorStore.delegate = LiteEmbeddingsVectorStore(
@@ -1017,10 +1070,29 @@ class KernelService {
         docsId: docsId,
         llmConfig: embeddingsLlmConfig,
       );
+      final driftMemory = _driftMemory;
+      if (driftMemory != null) {
+        final memorySummaryDocsId = await _ensureDocsId(
+          embeddingsClient,
+          _memorySummaryDocsName(config.docsName),
+          embeddingsLlmConfig,
+        );
+        _memorySummaryIndexer = MemorySummaryIndexer(
+          memory: driftMemory,
+          client: embeddingsClient,
+          llmConfig: embeddingsLlmConfig,
+          docsId: memorySummaryDocsId,
+          logger: _logger,
+        );
+        _kernel.memoryPipeline.indexer = _memorySummaryIndexer;
+        await _syncEmbeddingsIndexes();
+      }
       _restartEmbeddingsHealthMonitoring(config.baseUrl);
       return true;
     } catch (_) {
       vectorStore.delegate = ThrowingTextQueryVectorStore();
+      _memorySummaryIndexer = null;
+      _kernel.memoryPipeline.indexer = null;
       return false;
     }
   }
@@ -1206,15 +1278,11 @@ class KernelService {
   }
 
   bool _areLlmServicesReady() {
-    final perception = _perceptionSwitch;
-    final planning = _planningSwitch;
-    final learning = _learningSwitch;
-    if (perception == null || planning == null || learning == null) {
+    final preferenceExtractor = _preferenceExtractorSwitch;
+    if (preferenceExtractor == null) {
       return false;
     }
-    return perception.delegate is! ThrowingPerception &&
-        planning.delegate is! ThrowingPlanning &&
-        learning.delegate is! ThrowingLearning;
+    return preferenceExtractor.delegate is! ThrowingPreferenceExtractor;
   }
 
   bool _hasHealthyExternalService(
@@ -1228,223 +1296,6 @@ class KernelService {
     }
     return false;
   }
-
-  /// Get memory snapshot for a scope.
-  ///
-  /// [scope] typically matches the source.
-  /// [limit] caps the number of recent records returned.
-  Future<MemorySnapshot> getMemorySnapshot({
-    required String scope,
-    int limit = 20,
-  }) async {
-    final snapshot = await _kernel.memory.getSnapshot(scope: scope);
-    return MemorySnapshot(
-      scope: snapshot.scope,
-      data: snapshot.data,
-      shortTermMemory: snapshot.shortTermMemory,
-      longTermMemory: snapshot.longTermMemory,
-      records: snapshot.records,
-    );
-  }
-
-  /// Get preference snapshot for the default user.
-  Future<PreferenceSnapshot> getPreferenceSnapshot() {
-    const userId = _defaultUserId;
-    return _kernel.preference.getSnapshot(userId: userId);
-  }
-
-  /// List memory records for management UI.
-  ///
-  /// Returns paged summary records with deletion ids.
-  Future<List<MemoryRecordListItem>> listMemoryRecords({
-    int pageNum = 0,
-    int pageSize = 50,
-  }) async {
-    if (pageNum < 0) {
-      throw ArgumentError.value(pageNum, 'pageNum', 'must be non-negative');
-    }
-    if (pageSize <= 0) {
-      throw ArgumentError.value(pageSize, 'pageSize', 'must be positive');
-    }
-    final records = await _kernel.memory.listRecords(
-      type: 'MEMORY_SUMMARY',
-      includeSummaries: true,
-      offset: pageNum * pageSize,
-      limit: pageSize,
-    );
-    return records
-        .where((record) => record.id != null)
-        .map(
-          (record) => MemoryRecordListItem(
-            id: record.id!,
-            text: _memorySummaryText(record),
-            timestamp: record.timestamp,
-          ),
-        )
-        .toList(growable: false);
-  }
-
-  Future<void> deleteMemoryRecord(String id) {
-    return _kernel.memory.deleteRecord(id);
-  }
-
-  /// List preference entries for management UI.
-  Future<List<PreferenceListItem>> listPreferenceItems({
-    String userId = _defaultUserId,
-  }) async {
-    final preferences = await _kernel.preference.listPreferences(
-      userId: userId,
-    );
-    return preferences.entries
-        .where((entry) => entry.key != 'signals')
-        .map(
-          (entry) => PreferenceListItem(
-            key: entry.key,
-            text: _preferenceItemText(entry.key, entry.value),
-          ),
-        )
-        .toList(growable: false);
-  }
-
-  Future<void> deletePreferenceKey(String key, {String? userId}) {
-    return _kernel.preference.deletePreferenceKey(
-      key,
-      userId: userId ?? _defaultUserId,
-    );
-  }
-
-  /// Suggest next action when there is no user input.
-  ///
-  /// [source] identifies the caller or channel.
-  /// [allowedActions] limits which actions can be suggested.
-  /// [memoryLimit] controls how many recent memory records are exposed.
-  @Deprecated(
-    'suggestNextAction is deprecated and will be removed in a future release. '
-    'Prefer direct execution-oriented APIs.',
-  )
-  Future<IntentResponseDto> suggestNextAction({
-    required String source,
-    List<String>? allowedActions,
-    int memoryLimit = 5,
-  }) async {
-    const userId = _defaultUserId;
-    final memorySnapshot = await _kernel.memory.getSnapshot(scope: source);
-    final preferenceSnapshot = await _kernel.preference.getSnapshot(
-      userId: userId,
-    );
-    final directory = _resolveOpenToolDirectory();
-    final toolSummaries = directory.isEmpty
-        ? const []
-        : await directory.summaries();
-    final data = <String, dynamic>{
-      'mode': 'suggestion',
-      'memoryScope': memorySnapshot.scope,
-      'shortTermMemory': memorySnapshot.shortTermMemory,
-      'longTermMemory': memorySnapshot.longTermMemory,
-      'preferences': preferenceSnapshot.preferences,
-      'availableTools': toolSummaries,
-      if (allowedActions != null && allowedActions.isNotEmpty)
-        'allowedActions': allowedActions,
-    };
-    final percept = await _kernel.perception.process(
-      RawInput(userId: userId, source: source, data: data),
-    );
-    final candidates = percept.candidates
-        .map(
-          (candidate) => IntentCandidateDto(
-            action: candidate.action,
-            payload: {
-              if (candidate.target != null) 'target': candidate.target,
-              if (candidate.params != null) ...candidate.params!,
-            },
-            confidence: candidate.confidence,
-          ),
-        )
-        .toList();
-    return IntentResponseDto(candidates: candidates);
-  }
-
-  /// Submit a raw input.
-  ///
-  /// [source] identifies the caller or channel (e.g., KernelSources.cli).
-  /// [content] is the LiteAgent Content list; text is derived from it.
-  /// [data] carries additional structured payload.
-  ///
-  /// Returns a [JobHandle] for status tracking or confirmation.
-  @Deprecated(
-    'submitRaw is deprecated and will be removed in a future release. '
-    'Prefer direct execution-oriented APIs.',
-  )
-  JobHandle submitRaw({
-    required String source,
-    required List<Content> content,
-    Map<String, dynamic>? data,
-  }) {
-    const userId = _defaultUserId;
-    final runner = _perceptionRunner;
-    if (runner != null) {
-      return runner.submitRaw(
-        source: source,
-        content: content,
-        data: data,
-        userId: userId,
-      );
-    }
-    final derivedText = _contentToText(content);
-    if (derivedText == null || derivedText.trim().isEmpty) {
-      throw ArgumentError('content is required.');
-    }
-    return _kernel.input(
-      RawInput(
-        userId: userId,
-        source: source,
-        text: derivedText,
-        data: _mergeContent(data, content),
-      ),
-    );
-  }
-
-  /// Submit a selected intent candidate (action + payload).
-  ///
-  /// [source] identifies the caller or channel (e.g., KernelSources.api).
-  /// [intent] is the chosen intent candidate.
-  @Deprecated(
-    'submitIntent is deprecated and will be removed in a future release. '
-    'Prefer direct execution-oriented APIs.',
-  )
-  JobHandle submitIntent({
-    required String source,
-    required IntentCandidateDto intent,
-  }) {
-    const userId = _defaultUserId;
-    final target = intent.payload['target'];
-    return _kernel.input(
-      RawInput(
-        userId: userId,
-        source: source,
-        data: {
-          'action': intent.action,
-          if (target is String) 'target': target,
-          'params': intent.payload,
-        },
-      ),
-    );
-  }
-
-  /// Confirm or reject a pending job that requires user confirmation.
-  ///
-  /// [jobId] is the job awaiting confirmation.
-  /// [confirmed] true to proceed, false to cancel.
-  @Deprecated(
-    'confirmJob is deprecated and will be removed in a future release. '
-    'Prefer direct execution-oriented APIs.',
-  )
-  JobHandle confirmJob(String jobId, {required bool confirmed}) {
-    return _kernel.confirmJob(jobId, confirmed: confirmed);
-  }
-
-  // Job snapshots are intentionally not exposed. Use confirmation callbacks
-  // for user-gated actions instead of polling job status.
 
   Future<CronTaskDto> createCronTask({
     required String name,
@@ -1613,151 +1464,30 @@ class KernelService {
     return _requireCronModule().stop();
   }
 
-  /// Register a local OpenTool handler (callback tool).
-  ///
-  /// [tool] is the local OpenTool Tool implementation.
-  /// Tool id is derived from the OpenTool spec (info.title).
-  void registerLocalOpenTool(Tool tool) {
-    final directory = _resolveOpenToolDirectory();
-    directory.registerLocal(tool);
-  }
-
-  /// Register a remote OpenTool (OpenTool Server).
-  ///
-  /// [spec] is the OpenTool specification.
-  /// [serverUrl] overrides the spec's server url.
-  /// [apiKey] is used when calling the remote OpenTool.
-  String registerRemoteOpenTool(
-    OpenTool spec, {
-    String? serverUrl,
-    String? apiKey,
-  }) {
-    final directory = _resolveOpenToolDirectory();
-    return directory.registerRemote(spec, serverUrl: serverUrl, apiKey: apiKey);
-  }
-
-  bool updateRemoteOpenToolEndpoint(
-    String toolId, {
-    String? serverUrl,
-    String? apiKey,
-  }) {
-    if ((serverUrl == null || serverUrl.trim().isEmpty) && apiKey == null) {
-      throw ArgumentError('Either serverUrl or apiKey is required.');
-    }
-    final directory = _resolveOpenToolDirectory();
-    return directory.updateRemoteEndpoint(
-      toolId,
-      serverUrl: serverUrl,
-      apiKey: apiKey,
-    );
-  }
-
-  void updateAppInfoList(List<AppInfo> apps) {
-    final tool = _ensureAppCalledTool();
-    tool.updateApps(apps);
-    final directory = _resolveOpenToolDirectory();
-    directory.updateLocalToolSpec(
-      tool,
-      tool.buildSpec(),
-      toolId: AppCalledTool.toolId,
-    );
-  }
-
-  void setAppCalledHandler(AppCalledHandler handler) {
-    final tool = _ensureAppCalledTool();
-    tool.updateHandler(handler);
-  }
-
   // ---------------------------------------------------------------------------
   // Debug API
   // ---------------------------------------------------------------------------
 
-  Future<List<MemoryRecord>> listAllMemoryRecords({
-    String? type,
-    String? scope,
-    int offset = 0,
-    int limit = 50,
-    bool descending = false,
-  }) {
-    return _kernel.memory.listRecords(
-      type: type,
-      scope: scope,
-      offset: offset,
-      limit: limit,
-      includeSummaries: true,
-      descending: descending,
-    );
-  }
+  bool get debugMemorySummarizerAvailable =>
+      _kernel.memoryPipeline.summarizerAvailable;
 
-  Future<List<String>> listMemoryScopes() async {
-    final driftMemory = _driftMemory;
-    if (driftMemory != null) {
-      return driftMemory.listScopes();
+  Future<PreferenceExtractionTriggerResult>
+  _triggerPreferenceExtractionInternal() async {
+    final processor = _preferenceProcessor;
+    if (processor == null) {
+      return const PreferenceExtractionTriggerResult(
+        preferences: [],
+        sourceRecordCount: 0,
+        minRequired: 1,
+        reason: PreferenceExtractionTriggerResult.reasonEmpty,
+      );
     }
-    return const [];
+    return processor.triggerNow();
   }
-
-  Future<List<PreferenceSignal>> listPreferenceSignals({String? userId}) {
-    return _kernel.preference.listSignals(userId: userId ?? _defaultUserId);
-  }
-
-  Future<MemoryRecord?> triggerMemorySummarization({String? scope}) async {
-    final summarizer = _memorySummarizer;
-    if (summarizer == null) return null;
-    final targetScope = scope ?? (await listMemoryScopes()).firstOrNull;
-    if (targetScope == null) return null;
-    return summarizer.summarizeScope(scope: targetScope);
-  }
-
-  Future<Map<String, dynamic>> triggerPreferenceAggregation({
-    String? userId,
-  }) async {
-    final aggregator = _preferenceAggregator;
-    if (aggregator == null) return const {};
-    return aggregator.aggregateUser(userId: userId ?? _defaultUserId);
-  }
-
-  Future<void> deleteAllMemoryRecords({String? type, String? scope}) {
-    return _kernel.memory.deleteAllRecords(scope: scope, type: type);
-  }
-
-  Future<void> clearPreferences({String? userId}) {
-    return _kernel.preference.savePreferences(
-      const {},
-      userId: userId ?? _defaultUserId,
-    );
-  }
-
-  bool get debugMemorySummarizerAvailable => _memorySummarizer != null;
-  bool get debugPreferenceAggregatorAvailable => _preferenceAggregator != null;
 
   // Debug/admin accessors live in KernelAdminService.
 
-  static Kernel _buildKernel({
-    required Perception perception,
-    required Planning planning,
-    required OpenToolDirectory openToolDirectory,
-    required Supervision supervision,
-    required DriftMemory memory,
-    required Preference preference,
-    required Learning learning,
-    required JobManager jobManager,
-    required KernelLogger logger,
-  }) {
-    return Kernel(
-      perception: perception,
-      planning: planning,
-      execution: OpenToolExecution(openToolDirectory: openToolDirectory),
-      supervision: supervision,
-      memory: memory,
-      preference: preference,
-      learning: learning,
-      jobManager: jobManager,
-      logger: logger,
-    );
-  }
-
-  static _LlmServiceDelegates _buildLlmServiceDelegates({
+  static _PreferenceExtractorDelegate _buildPreferenceExtractor({
     required LlmQueue llmQueue,
     required LiteAgentClient client,
     required LLMConfig llmConfig,
@@ -1766,83 +1496,28 @@ class KernelService {
     required ModelProfiler? modelProfiler,
     required Supervision supervision,
     required Preference preference,
-    required OpenToolDirectory openToolDirectory,
-    required KernelLogger? logger,
     required KernelRuntimeConfig runtimeConfig,
-    List<String>? learningSkills,
+    List<String>? preferenceSkills,
   }) {
-    final perception = LiteAgentPerception(
-      llmQueue: llmQueue,
-      client: client,
-      llmConfig: llmConfig,
-      llmConfigResolver: _makeResolver(
-        llmQueue: llmQueue,
-        pool: pool,
-        purpose: 'perception',
-        mode: mode,
-        profiler: modelProfiler,
-        supervision: supervision,
-        runtimeConfig: runtimeConfig,
-      ),
-      systemPrompt:
-          'You are an intent extractor. Use emit_intent or reject_intent.',
-      actionHints: const [
-        'count',
-        'create',
-        'read',
-        'list',
-        'sequentiallyRead',
-        'update',
-        'delete',
-        'run',
-      ],
-      fallback: RuleBasedPerception(),
-    );
-    final planning = LiteAgentPlanning(
-      llmQueue: llmQueue,
-      client: client,
-      llmConfig: llmConfig,
-      llmConfigResolver: _makeResolver(
-        pool: pool,
-        purpose: 'planning',
-        mode: mode,
-        profiler: modelProfiler,
-        supervision: supervision,
-        runtimeConfig: runtimeConfig,
-      ),
-      systemPrompt: 'You plan the next action. Call exactly one planning tool.',
-      openToolDirectory: openToolDirectory,
-    );
-    final liteAgentLearning = LiteAgentLearning(
+    final preferenceExtractor = AgentPreferenceExtractor(
       llmQueue: llmQueue,
       client: client,
       preference: preference,
       llmConfig: llmConfig,
       llmConfigResolver: _makeResolver(
         pool: pool,
-        purpose: 'learning',
+        purpose: 'preference_extraction',
         mode: mode,
         profiler: modelProfiler,
         supervision: supervision,
         runtimeConfig: runtimeConfig,
       ),
       systemPrompt:
-          'You extract user preference signals. Use emit_preference or reject_preference.',
-      skills: learningSkills,
+          'You extract stable user preferences. Use generate_preference with a text array, or return an empty array.',
+      skills: preferenceSkills,
     );
-    final learning = DeferredLearning(
-      delegate: liteAgentLearning,
-      llmQueue: llmQueue,
-      logger: logger,
-      enabled: runtimeConfig.learningDeferredEnabled,
-      interval: runtimeConfig.learningInterval,
-      maxPerRun: runtimeConfig.learningMaxPerRun,
-      queueLimit: runtimeConfig.learningQueueLimit,
-    );
-    return _LlmServiceDelegates(
-      perception: perception,
-      planning: planning,
-      learning: learning,
+    return _PreferenceExtractorDelegate(
+      preferenceExtractor: preferenceExtractor,
     );
   }
 
@@ -1932,108 +1607,32 @@ class KernelService {
     return maxConcurrency > 0 && snapshot.inFlight < maxConcurrency;
   }
 
-  Map<String, dynamic>? _mergeContent(
-    Map<String, dynamic>? data,
-    List<Content>? content,
-  ) {
-    if (content == null || content.isEmpty) {
-      return data;
-    }
-    final merged = <String, dynamic>{};
-    if (data != null) {
-      merged.addAll(data);
-    }
-    merged['content'] = content.map((item) => item.toJson()).toList();
-    return merged;
+  Future<void> _syncMemorySummaryIndex({List<MemorySummary>? summaries}) async {
+    await _kernel.memoryPipeline.syncIndexIfAvailable(summaries: summaries);
   }
 
-  String? _contentToText(List<Content>? content) {
-    if (content == null || content.isEmpty) {
-      return null;
+  Future<void> _syncPreferenceIndex() async {
+    if (!_isEmbeddingsAvailable(_kernel.supervision)) {
+      return;
     }
-    return content
-        .map((item) {
-          final json = item.toJson();
-          final type = json['type'];
-          if (type is String && type.toLowerCase() == 'image') {
-            return '[image]';
-          }
-          return item.message;
-        })
-        .join('\n');
-  }
-
-  MemoryRecord _buildExternalAgentMessageRecord({
-    required String userId,
-    required String bundleId,
-    required AgentMessage agentMessage,
-  }) {
-    final scope = 'bundle:$bundleId';
-    return MemoryRecord(
-      jobId: 'external-${DateTime.now().microsecondsSinceEpoch}',
-      userId: userId,
-      sessionId: agentMessage.sessionId,
-      scope: scope,
-      type: 'EXTERNAL_AGENT_MESSAGE',
-      data: {
-        'bundleId': bundleId,
-        'userId': userId,
-        'liteAgentSessionId': agentMessage.sessionId,
-        'taskId': agentMessage.taskId,
-        'agentMessage': _sanitizeJsonValue(agentMessage.toJson()),
-      },
-      timestamp: agentMessage.createTime,
-    );
-  }
-
-  OpenToolDirectory _resolveOpenToolDirectory() {
-    OpenToolDirectory? fromPlanning;
-    final planning = _kernel.planning;
-    if (planning is RuleBasedPlanning) {
-      fromPlanning = planning.openToolDirectory;
-    } else if (planning is LiteAgentPlanning) {
-      fromPlanning = planning.openToolDirectory;
-    }
-
-    OpenToolDirectory? fromExecution;
-    final execution = _kernel.execution;
-    if (execution is OpenToolExecution) {
-      fromExecution = execution.openToolDirectory;
-    }
-
-    if (fromPlanning != null &&
-        fromExecution != null &&
-        !identical(fromPlanning, fromExecution)) {
-      throw StateError(
-        'OpenToolDirectory mismatch between planning and execution.',
+    final preference = _kernel.preference;
+    try {
+      await preference.syncIndexes(userId: _defaultUserId);
+    } catch (error) {
+      _logger?.warn(
+        'Failed to sync preference embeddings index.',
+        data: {'error': error.toString()},
       );
     }
-    final directory = fromPlanning ?? fromExecution;
-    if (directory == null) {
-      throw StateError('OpenToolDirectory not configured on kernel.');
-    }
-    return directory;
   }
 
-  String _memorySummaryText(MemoryRecord record) {
-    final data = record.data;
-    if (data != null) {
-      final summaryText = _firstNonEmptyString(const ['summaryText'], data);
-      if (summaryText != null) {
-        return summaryText;
-      }
-      final keyFacts = data['keyFacts'];
-      if (keyFacts is List) {
-        final text = keyFacts
-            .map((item) => item is String ? item.trim() : '')
-            .where((item) => item.isNotEmpty)
-            .join('\n');
-        if (text.isNotEmpty) {
-          return text;
-        }
-      }
-    }
-    return 'Memory summary';
+  Future<void> _syncEmbeddingsIndexes() async {
+    await _syncMemorySummaryIndex();
+    await _syncPreferenceIndex();
+  }
+
+  OpenToolDaemonRegistry _resolveOpenToolDaemonRegistry() {
+    return _kernel.openToolDaemonRegistry;
   }
 
   CronModule _requireCronModule() {
@@ -2163,155 +1762,84 @@ class KernelService {
       message: message.message,
     );
   }
+}
 
-  String _preferenceItemText(String key, Object? value) {
-    if (value is String && value.trim().isNotEmpty) {
-      return value;
-    }
-    if (value is List) {
-      final text = value
-          .map((item) => item is String ? item.trim() : '')
-          .where((item) => item.isNotEmpty)
-          .join(', ');
-      if (text.isNotEmpty) {
-        return text;
-      }
-    }
-    final encoded = _encodeCompactJson(value);
-    if (encoded != null && encoded.isNotEmpty) {
-      return '$key: $encoded';
-    }
-    return key;
+String _memorySummaryDocsName(String docsName) {
+  final normalized = docsName.trim();
+  if (normalized.isEmpty) {
+    return 'memory_summaries';
   }
+  return '${normalized}_memory_summaries';
+}
 
-  String? _firstNonEmptyString(List<String> keys, Map<String, dynamic> data) {
-    for (final key in keys) {
-      final value = data[key];
-      if (value is String && value.trim().isNotEmpty) {
-        return value;
-      }
-    }
-    return null;
+String _preferenceDocsName(String docsName) {
+  final normalized = docsName.trim();
+  if (normalized.isEmpty) {
+    return 'preferences';
   }
+  return '${normalized}_preferences';
+}
 
-  String? _encodeCompactJson(Object? value) {
-    if (value == null) {
-      return null;
-    }
-    try {
-      return jsonEncode(value);
-    } catch (_) {
-      return value.toString();
-    }
+double _memorySummaryFinalScore({
+  required double semanticScore,
+  required double recencyScore,
+  required double timeGroupBias,
+}) {
+  return semanticScore * 0.7 + recencyScore * 0.2 + timeGroupBias * 0.1;
+}
+
+double _memorySummaryRecencyScore(MemorySummary summary, DateTime now) {
+  final age = now.difference(summary.updatedAt);
+  if (age.inHours <= 6) {
+    return 1.0;
   }
-
-  AppCalledTool _ensureAppCalledTool() {
-    final existing = _appCalledTool;
-    if (existing != null) {
-      return existing;
-    }
-    final tool = AppCalledTool();
-    final directory = _resolveOpenToolDirectory();
-    directory.registerLocal(tool, toolId: AppCalledTool.toolId);
-    _appCalledTool = tool;
-    return tool;
+  if (age.inDays <= 1) {
+    return 0.9;
   }
+  if (age.inDays <= 7) {
+    return 0.75;
+  }
+  if (age.inDays <= 30) {
+    return 0.6;
+  }
+  if (age.inDays <= 90) {
+    return 0.45;
+  }
+  return 0.3;
+}
 
-  Object? _sanitizeJsonValue(Object? value) {
-    if (value == null) {
-      return null;
-    }
-    if (value is num || value is String || value is bool) {
-      return value;
-    }
-    if (value is Map) {
-      final mapped = <String, dynamic>{};
-      value.forEach((key, entry) {
-        mapped[key.toString()] = _sanitizeJsonValue(entry);
-      });
-      return mapped;
-    }
-    if (value is Iterable) {
-      return value.map(_sanitizeJsonValue).toList(growable: false);
-    }
-    try {
-      return jsonDecode(jsonEncode(value));
-    } catch (_) {
-      return value.toString();
-    }
+double _memorySummaryTimeGroupBias(String timeGroup) {
+  switch (timeGroup) {
+    case 'recent':
+      return 1.0;
+    case 'day':
+      return 0.9;
+    case 'week':
+      return 0.75;
+    case 'month':
+      return 0.6;
+    case 'quarter':
+      return 0.45;
+    case 'archive':
+      return 0.3;
+    default:
+      return 0.5;
   }
 }
 
-class ConfirmationListener {
-  final void Function() _cancel;
-
-  ConfirmationListener._(this._cancel);
-
-  Future<void> cancel() {
-    _cancel();
-    return Future.value();
-  }
-}
-
-class _JobSnapshotListenerEntry {
-  final String? jobId;
-  final void Function(JobSnapshot snapshot) onNeedsConfirmation;
-  bool _active = true;
-
-  _JobSnapshotListenerEntry({
-    required this.jobId,
-    required this.onNeedsConfirmation,
-  });
-
-  bool get active => _active;
-
-  void emit(JobSnapshot snapshot) {
-    if (!_active) {
-      return;
-    }
-    if (jobId != null && jobId!.isNotEmpty && snapshot.jobId != jobId) {
-      return;
-    }
-    onNeedsConfirmation(snapshot);
-  }
-
-  void cancel() {
-    if (!_active) {
-      return;
-    }
-    _active = false;
-  }
-}
-
-class _JobSnapshotDispatcher {
-  final List<_JobSnapshotListenerEntry> _listeners = [];
-
-  ConfirmationListener add({
-    String? jobId,
-    required void Function(JobSnapshot snapshot) onNeedsConfirmation,
-  }) {
-    final entry = _JobSnapshotListenerEntry(
-      jobId: jobId,
-      onNeedsConfirmation: onNeedsConfirmation,
-    );
-    _listeners.add(entry);
-    return ConfirmationListener._(() {
-      entry.cancel();
-      _listeners.remove(entry);
-    });
-  }
-
-  void notify(JobSnapshot snapshot) {
-    if (_listeners.isEmpty) {
-      return;
-    }
-    final snapshotListeners = List<_JobSnapshotListenerEntry>.from(_listeners);
-    for (final entry in snapshotListeners) {
-      entry.emit(snapshot);
-      if (!entry.active) {
-        _listeners.remove(entry);
-      }
-    }
+String _memorySummaryTimeFamily(String timeGroup) {
+  switch (timeGroup) {
+    case 'recent':
+    case 'day':
+      return 'near';
+    case 'week':
+    case 'month':
+      return 'mid';
+    case 'quarter':
+    case 'archive':
+      return 'far';
+    default:
+      return 'mid';
   }
 }
 
@@ -2340,14 +1868,6 @@ String _resolveEmbeddingsModel(String? model, String fallback) {
   return model;
 }
 
-bool _isRelevantMatch(VectorMatch match, double maxDistance) {
-  final distance = match.payload?['distance'];
-  if (distance is num) {
-    return distance <= maxDistance;
-  }
-  return match.score >= -maxDistance;
-}
-
 bool _isModelAvailable(Supervision supervision, LLMConfig config) {
   if (supervision is AdaptiveSupervision) {
     final snapshot = supervision.modelHealthSnapshot();
@@ -2358,6 +1878,19 @@ bool _isModelAvailable(Supervision supervision, LLMConfig config) {
     );
     final health = snapshot[modelKey];
     return health?.available ?? true;
+  }
+  return true;
+}
+
+bool _isEmbeddingsAvailable(Supervision supervision) {
+  if (supervision is AdaptiveSupervision) {
+    final snapshot = supervision.externalServiceHealthSnapshot();
+    for (final item in snapshot.items.values) {
+      if (item.type == ExternalServiceType.embeddings) {
+        return item.available;
+      }
+    }
+    return false;
   }
   return true;
 }
@@ -2395,7 +1928,7 @@ class _OpenToolDaemonPresetSync {
   final Duration debounce;
   final DaemonPresetFilter? presetFilter;
   final Future<void> Function(List<PresetOpenSpec>) setPresetOpenSpecList;
-  final OpenToolDirectory Function() openToolDirectoryProvider;
+  final OpenToolDaemonRegistry Function() openToolDaemonRegistryProvider;
   final KernelLogger? logger;
 
   StreamSubscription<ToolLifecycleEventDto>? _subscription;
@@ -2413,7 +1946,7 @@ class _OpenToolDaemonPresetSync {
     required this.debounce,
     required this.presetFilter,
     required this.setPresetOpenSpecList,
-    required this.openToolDirectoryProvider,
+    required this.openToolDaemonRegistryProvider,
     this.logger,
   });
 
@@ -2598,12 +2131,12 @@ class _OpenToolDaemonPresetSync {
         .where((tool) => presetFilter?.call(tool.toPresetCandidate()) ?? true)
         .map((tool) => tool.preset)
         .toList();
-    final directory = openToolDirectoryProvider();
+    final registry = openToolDaemonRegistryProvider();
     final nextDirectoryToolIds = <String>{};
     for (final tool in activeTools) {
       final directoryToolId = _directoryToolId(tool.toolId);
       nextDirectoryToolIds.add(directoryToolId);
-      directory.registerRemote(
+      registry.registerRemote(
         tool.spec,
         toolId: directoryToolId,
         serverUrl: tool.serverUrl,
@@ -2611,7 +2144,7 @@ class _OpenToolDaemonPresetSync {
       );
     }
     for (final toolId in _directoryToolIds.difference(nextDirectoryToolIds)) {
-      directory.unregister(toolId);
+      registry.unregister(toolId);
     }
     _directoryToolIds
       ..clear()
@@ -2620,9 +2153,9 @@ class _OpenToolDaemonPresetSync {
   }
 
   void _clearDirectoryTools() {
-    final directory = openToolDirectoryProvider();
+    final registry = openToolDaemonRegistryProvider();
     for (final toolId in _directoryToolIds) {
-      directory.unregister(toolId);
+      registry.unregister(toolId);
     }
     _directoryToolIds.clear();
   }
@@ -2631,6 +2164,42 @@ class _OpenToolDaemonPresetSync {
       DaemonClient(host: hostProvider(), port: portProvider());
 
   String _directoryToolId(String toolId) => 'daemon:$toolId';
+}
+
+class _ScoredMemorySummary {
+  final MemorySummary summary;
+  final double finalScore;
+  final String timeGroup;
+
+  const _ScoredMemorySummary({
+    required this.summary,
+    required this.finalScore,
+    required this.timeGroup,
+  });
+}
+
+class _ScoredPreferenceEntry {
+  final PreferenceEntry entry;
+  final double finalScore;
+
+  const _ScoredPreferenceEntry({required this.entry, required this.finalScore});
+}
+
+double _preferenceRecencyScore(PreferenceEntry entry, DateTime now) {
+  final age = now.difference(entry.updatedAt);
+  if (age.inHours <= 6) {
+    return 1.0;
+  }
+  if (age.inDays <= 1) {
+    return 0.9;
+  }
+  if (age.inDays <= 7) {
+    return 0.75;
+  }
+  if (age.inDays <= 30) {
+    return 0.6;
+  }
+  return 0.4;
 }
 
 class _DaemonActiveTool {
@@ -2716,90 +2285,4 @@ class _DaemonToolLifecycleEventType {
 
 class _DaemonToolStatusType {
   static const String running = 'running';
-}
-
-class _ObservableJobManager implements JobManager {
-  final JobManager _delegate;
-  final _JobSnapshotDispatcher _snapshots;
-
-  _ObservableJobManager(this._delegate, this._snapshots);
-
-  @override
-  JobHandle createJob({
-    required String source,
-    String? userId,
-    String? sessionId,
-  }) {
-    final handle = _delegate.createJob(
-      source: source,
-      userId: userId,
-      sessionId: sessionId,
-    );
-    _emitSnapshot(handle.jobId);
-    return handle;
-  }
-
-  @override
-  JobHandle markQueued(String jobId) {
-    final handle = _delegate.markQueued(jobId);
-    _emitSnapshot(jobId);
-    return handle;
-  }
-
-  @override
-  JobHandle markRunning(String jobId) {
-    final handle = _delegate.markRunning(jobId);
-    _emitSnapshot(jobId);
-    return handle;
-  }
-
-  @override
-  JobHandle markDone(String jobId, JobResult result) {
-    final handle = _delegate.markDone(jobId, result);
-    _emitSnapshot(jobId);
-    return handle;
-  }
-
-  @override
-  JobHandle markFailed(String jobId, String reason) {
-    final handle = _delegate.markFailed(jobId, reason);
-    _emitSnapshot(jobId);
-    return handle;
-  }
-
-  @override
-  JobHandle markNeedsConfirmation(
-    String jobId,
-    JobPrompt prompt,
-    Intent intent,
-  ) {
-    final handle = _delegate.markNeedsConfirmation(jobId, prompt, intent);
-    _emitSnapshot(jobId);
-    return handle;
-  }
-
-  @override
-  JobHandle cancel(String jobId, {String? reason}) {
-    final handle = _delegate.cancel(jobId, reason: reason);
-    _emitSnapshot(jobId);
-    return handle;
-  }
-
-  @override
-  JobHandle getHandle(String jobId) => _delegate.getHandle(jobId);
-
-  @override
-  JobStatus getStatus(String jobId) => _delegate.getStatus(jobId);
-
-  @override
-  JobSnapshot getSnapshot(String jobId) => _delegate.getSnapshot(jobId);
-
-  void _emitSnapshot(String jobId) {
-    try {
-      final snapshot = _delegate.getSnapshot(jobId);
-      _snapshots.notify(snapshot);
-    } catch (_) {
-      // Ignore missing job snapshots.
-    }
-  }
 }

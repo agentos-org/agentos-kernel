@@ -1,4 +1,9 @@
-import 'package:hive/hive.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:drift/drift.dart';
+import 'package:drift/native.dart';
 
 import '../agent/model.dart';
 
@@ -13,8 +18,7 @@ class ModelPurposeStats {
     this.failureCount = 0,
   });
 
-  double get successRate =>
-      totalCalls == 0 ? 0.0 : successCount / totalCalls;
+  double get successRate => totalCalls == 0 ? 0.0 : successCount / totalCalls;
 
   Map<String, dynamic> toMap() => {
     'totalCalls': totalCalls,
@@ -99,24 +103,65 @@ class ModelProfile {
 }
 
 class ModelProfiler {
-  final Box<Map>? _box;
+  final QueryExecutor? _executor;
+  final _ModelProfilerDbUser? _user;
+  Future<void>? _openFuture;
   final Map<String, ModelProfile> _profiles = {};
   static const int _explorationThreshold = 10;
 
-  ModelProfiler({Box<Map>? box}) : _box = box {
-    _loadFromBox();
+  ModelProfiler() : _executor = null, _user = null;
+
+  ModelProfiler._(this._executor, this._user);
+
+  static Future<ModelProfiler> open({required String path}) async {
+    final profiler = ModelProfiler._(
+      _openConnection(path),
+      _ModelProfilerDbUser(),
+    );
+    await profiler._ensureOpen();
+    await profiler._loadFromDb();
+    return profiler;
   }
 
-  void _loadFromBox() {
-    final box = _box;
-    if (box == null) return;
-    for (final key in box.keys) {
-      final raw = box.get(key);
-      if (raw is Map) {
-        _profiles[key as String] = ModelProfile.fromMap(
-          Map<String, dynamic>.from(raw),
-        );
+  Future<void> _ensureOpen() {
+    final executor = _executor;
+    final user = _user;
+    if (executor == null || user == null) {
+      return Future.value();
+    }
+    _openFuture ??= () async {
+      await executor.ensureOpen(user);
+      await user.ensureInitialized(executor);
+    }();
+    return _openFuture!;
+  }
+
+  Future<void> _loadFromDb() async {
+    final executor = _executor;
+    if (executor == null) {
+      return;
+    }
+    final rows = await executor.runSelect('''
+SELECT model_key, profile_json
+FROM model_profiles;
+''', const []);
+    _profiles.clear();
+    for (final row in rows) {
+      final modelKey = row['model_key'] as String?;
+      final raw = row['profile_json'] as String?;
+      if (modelKey == null || modelKey.trim().isEmpty || raw == null) {
+        continue;
       }
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is Map<String, dynamic>) {
+          _profiles[modelKey] = ModelProfile.fromMap(decoded);
+        } else if (decoded is Map) {
+          _profiles[modelKey] = ModelProfile.fromMap(
+            Map<String, dynamic>.from(decoded),
+          );
+        }
+      } catch (_) {}
     }
   }
 
@@ -155,14 +200,10 @@ class ModelProfiler {
 
     final tps = metrics.tps;
     if (tps != null) {
-      profile.avgTps = _runningAvg(
-        profile.avgTps,
-        tps,
-        profile.totalCalls,
-      );
+      profile.avgTps = _runningAvg(profile.avgTps, tps, profile.totalCalls);
     }
 
-    _persist(modelKey, profile);
+    unawaited(_persist(modelKey, profile));
   }
 
   ModelProfile? getProfile(String modelKey) => _profiles[modelKey];
@@ -197,7 +238,54 @@ class ModelProfiler {
     return currentAvg + (newValue - currentAvg) / totalCount;
   }
 
-  void _persist(String modelKey, ModelProfile profile) {
-    _box?.put(modelKey, profile.toMap());
+  Future<void> _persist(String modelKey, ModelProfile profile) async {
+    final executor = _executor;
+    if (executor == null) {
+      return;
+    }
+    await _ensureOpen();
+    await executor.runCustom(
+      '''
+INSERT INTO model_profiles (model_key, profile_json)
+VALUES (?, ?)
+ON CONFLICT(model_key) DO UPDATE SET profile_json = excluded.profile_json;
+''',
+      [modelKey, jsonEncode(profile.toMap())],
+    );
   }
+}
+
+class _ModelProfilerDbUser implements QueryExecutorUser {
+  Future<void>? _initFuture;
+
+  @override
+  int get schemaVersion => 1;
+
+  @override
+  Future<void> beforeOpen(
+    QueryExecutor executor,
+    OpeningDetails details,
+  ) async {}
+
+  Future<void> ensureInitialized(QueryExecutor executor) {
+    _initFuture ??= _createSchema(executor);
+    return _initFuture!;
+  }
+
+  Future<void> _createSchema(QueryExecutor executor) async {
+    await executor.runCustom('''
+CREATE TABLE IF NOT EXISTS model_profiles (
+  model_key TEXT PRIMARY KEY,
+  profile_json TEXT NOT NULL
+);
+''');
+  }
+}
+
+QueryExecutor _openConnection(String path) {
+  return LazyDatabase(() async {
+    final file = File(path);
+    await file.parent.create(recursive: true);
+    return NativeDatabase(file);
+  });
 }

@@ -1,3 +1,6 @@
+import '../kernel/memory/model.dart';
+import '../kernel/preference/model.dart';
+
 class KernelSources {
   static const String cli = 'cli';
   static const String web = 'web';
@@ -6,25 +9,6 @@ class KernelSources {
   static const String test = 'test';
 
   const KernelSources._();
-}
-
-class MemoryRecordListItem {
-  final String id;
-  final String text;
-  final DateTime timestamp;
-
-  const MemoryRecordListItem({
-    required this.id,
-    required this.text,
-    required this.timestamp,
-  });
-}
-
-class PreferenceListItem {
-  final String key;
-  final String text;
-
-  const PreferenceListItem({required this.key, required this.text});
 }
 
 class DaemonToolSyncItem {
@@ -56,5 +40,17 @@ class DaemonToolSyncSnapshot {
     required this.port,
     required this.revision,
     required this.activeTools,
+  });
+}
+
+class RelevantContext {
+  final bool embeddingsAvailable;
+  final List<MemorySummary> memorySummaries;
+  final List<PreferenceEntry> preferences;
+
+  const RelevantContext({
+    required this.embeddingsAvailable,
+    required this.memorySummaries,
+    required this.preferences,
   });
 }

@@ -2,21 +2,20 @@ import 'dart:io';
 
 import 'package:agentos_kernel/src/kernel/cron/model.dart';
 import 'package:agentos_kernel/src/kernel/cron/store.dart';
-import 'package:hive/hive.dart';
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import 'package:test/test.dart';
 
 void main() {
-  group('HiveCronTaskStore', () {
+  group('DriftCronTaskStore', () {
     late Directory tempDir;
+    late String dbPath;
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp('cron_store_test');
-      Hive.init(tempDir.path);
+      dbPath = '${tempDir.path}/cron.sqlite';
     });
 
     tearDown(() async {
-      await Hive.close();
       if (tempDir.existsSync()) {
         await tempDir.delete(recursive: true);
       }
@@ -32,11 +31,7 @@ description: Break work into clear ordered steps before execution.
 1. Summarize the goal.
 2. Execute step by step.
 ''';
-      final firstStore = HiveCronTaskStore(
-        taskBox: await Hive.openBox<Map>('cron_tasks'),
-        runBox: await Hive.openBox<Map>('cron_runs'),
-        messageBox: await Hive.openBox<Map>('cron_messages'),
-      );
+      final firstStore = DriftCronTaskStore.open(path: dbPath);
       final task = CronTaskDefinition(
         cronId: 'cron-1',
         name: 'nightly-report',
@@ -102,14 +97,8 @@ description: Break work into clear ordered steps before execution.
       await firstStore.putTask(task);
       await firstStore.putRun(run);
       await firstStore.putRunMessage(message);
-      await Hive.close();
 
-      Hive.init(tempDir.path);
-      final secondStore = HiveCronTaskStore(
-        taskBox: await Hive.openBox<Map>('cron_tasks'),
-        runBox: await Hive.openBox<Map>('cron_runs'),
-        messageBox: await Hive.openBox<Map>('cron_messages'),
-      );
+      final secondStore = DriftCronTaskStore.open(path: dbPath);
 
       final loadedTask = await secondStore.getTask(task.cronId);
       final loadedRun = await secondStore.getRun(run.runId);
@@ -138,11 +127,7 @@ description: Break work into clear ordered steps before execution.
     test(
       'reads nested task status message content after Hive reopen',
       () async {
-        final firstStore = HiveCronTaskStore(
-          taskBox: await Hive.openBox<Map>('cron_tasks'),
-          runBox: await Hive.openBox<Map>('cron_runs'),
-          messageBox: await Hive.openBox<Map>('cron_messages'),
-        );
+        final firstStore = DriftCronTaskStore.open(path: dbPath);
         final message = CronRunMessageRecord(
           messageId: 'msg-nested-1',
           runId: 'run-nested-1',
@@ -160,14 +145,8 @@ description: Break work into clear ordered steps before execution.
         );
 
         await firstStore.putRunMessage(message);
-        await Hive.close();
 
-        Hive.init(tempDir.path);
-        final secondStore = HiveCronTaskStore(
-          taskBox: await Hive.openBox<Map>('cron_tasks'),
-          runBox: await Hive.openBox<Map>('cron_runs'),
-          messageBox: await Hive.openBox<Map>('cron_messages'),
-        );
+        final secondStore = DriftCronTaskStore.open(path: dbPath);
 
         final loadedMessages = await secondStore.listRunMessages(message.runId);
 
@@ -181,11 +160,7 @@ description: Break work into clear ordered steps before execution.
     );
 
     test('deletes a persisted run and cascades its messages', () async {
-      final store = HiveCronTaskStore(
-        taskBox: await Hive.openBox<Map>('cron_tasks'),
-        runBox: await Hive.openBox<Map>('cron_runs'),
-        messageBox: await Hive.openBox<Map>('cron_messages'),
-      );
+      final store = DriftCronTaskStore.open(path: dbPath);
       final run = CronRunRecord(
         runId: 'run-delete-1',
         cronId: 'cron-delete-1',

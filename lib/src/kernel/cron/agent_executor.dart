@@ -11,7 +11,7 @@ import 'daemon_open_spec_provider.dart';
 import 'executor.dart';
 import 'model.dart';
 
-class LiteAgentCronExecutor implements CronTaskExecutor {
+class AgentCronExecutor implements CronTaskExecutor {
   static const int _historyRetryAttempts = 3;
   static const Duration _historyRetryDelay = Duration(milliseconds: 150);
 
@@ -26,7 +26,7 @@ class LiteAgentCronExecutor implements CronTaskExecutor {
   final String daemonHost;
   final int daemonPort;
 
-  LiteAgentCronExecutor({
+  AgentCronExecutor({
     this.sdk,
     this.sdkResolver,
     this.logger,

@@ -1,20 +1,20 @@
 import 'dart:convert';
 
-import '../events.dart';
+import 'log_event.dart';
 
 abstract class KernelLogger {
-  void log(KernelEvent event, {Map<String, dynamic>? data});
+  void log(KernelLogEvent event, {Map<String, dynamic>? data});
   void error(String message, Object error, {Map<String, dynamic>? data});
   void warn(String message, {Map<String, dynamic>? data});
 }
 
 class ConsoleKernelLogger implements KernelLogger {
   @override
-  void log(KernelEvent event, {Map<String, dynamic>? data}) {
+  void log(KernelLogEvent event, {Map<String, dynamic>? data}) {
     final payload = <String, dynamic>{
       'level': 'info',
       'type': event.type,
-      'jobId': event.jobId,
+      'requestId': event.requestId,
       'userId': event.userId,
       'sessionId': event.sessionId,
       'source': event.source,

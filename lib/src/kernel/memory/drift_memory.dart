@@ -4,20 +4,17 @@ import 'dart:io';
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 
-import 'memory.dart';
 import 'model.dart';
 
-class DriftMemory implements Memory {
+class DriftMemory {
   final QueryExecutor _executor;
   final _MemoryDbUser _user = _MemoryDbUser();
-  final int _summaryLimit;
   Future<void>? _openFuture;
 
-  DriftMemory(this._executor, {int summaryLimit = 5})
-    : _summaryLimit = summaryLimit;
+  DriftMemory(this._executor);
 
-  factory DriftMemory.open({required String path, int summaryLimit = 5}) {
-    return DriftMemory(_openConnection(path), summaryLimit: summaryLimit);
+  factory DriftMemory.open({required String path}) {
+    return DriftMemory(_openConnection(path));
   }
 
   Future<void> _ensureOpen() {
@@ -28,427 +25,277 @@ class DriftMemory implements Memory {
     return _openFuture!;
   }
 
-  @override
-  Future<MemorySnapshot> getSnapshot({String? scope}) async {
+  Future<void> appendAgentMemoryMessage({
+    required String sessionId,
+    required String taskId,
+    required String actorId,
+    required AgentMemoryActorType actorType,
+    required List<String> content,
+    required DateTime timestamp,
+  }) async {
     await _ensureOpen();
-    final shortTerm = await getLatestStateRecord(
-      type: shortTermMemoryType,
-      scope: scope,
+    final normalizedSessionId = sessionId.trim();
+    final normalizedContent = content
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+    if (normalizedSessionId.isEmpty || normalizedContent.isEmpty) {
+      return;
+    }
+    final existing = await getMemoryItem(normalizedSessionId);
+    final entry = _renderAgentMemoryEntry(
+      taskId: taskId,
+      actorId: actorId,
+      actorType: actorType,
+      content: normalizedContent,
+      timestamp: timestamp,
     );
-    final longTerm = await getLatestStateRecord(
-      type: longTermMemoryType,
-      scope: scope,
-    );
-    final summaries = await listSummaryRecords(
-      scope: scope,
-      limit: _summaryLimit,
-    );
-    return MemorySnapshot(
-      scope: scope,
-      data: {
-        'shortTermMemory': shortTerm?.data ?? const {},
-        'longTermMemory': longTerm?.data ?? const {},
-      },
-      shortTermMemory: shortTerm?.data,
-      longTermMemory: longTerm?.data,
-      records: summaries,
+    final mergedContent = existing == null || existing.content.trim().isEmpty
+        ? entry
+        : '${existing.content.trim()}\n\n$entry';
+    await upsertMemoryItem(
+      MemoryItem(
+        id: normalizedSessionId,
+        type: agentMemoryItemType,
+        sourceId: normalizedSessionId,
+        content: mergedContent,
+        timestamp: timestamp,
+      ),
     );
   }
 
-  @override
-  Future<void> record(MemoryRecord record) async {
+  Future<void> upsertMemoryItem(MemoryItem item) async {
     await _ensureOpen();
-    final dataJson = _encodeJson(record.data);
-    final extras = _extractExtras(record.data);
     await _executor.runCustom(
       '''
-INSERT INTO memory_records (
-  job_id,
-  user_id,
-  session_id,
-  scope,
+INSERT INTO memory_items (
+  id,
   type,
-  data_json,
-  timestamp,
-  bundle_id,
-  task_id,
-  liteagent_session_id,
-  message_index
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  source_id,
+  content,
+  timestamp
+) VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+  type = excluded.type,
+  source_id = excluded.source_id,
+  content = excluded.content,
+  timestamp = excluded.timestamp;
 ''',
       [
-        record.jobId,
-        record.userId,
-        record.sessionId,
-        record.scope,
-        record.type,
-        dataJson,
-        record.timestamp.millisecondsSinceEpoch,
-        extras.bundleId,
-        extras.taskId,
-        extras.liteAgentSessionId,
-        extras.messageIndex,
+        item.id,
+        item.type,
+        item.sourceId,
+        item.content,
+        item.timestamp.millisecondsSinceEpoch,
       ],
     );
   }
 
-  @override
-  Future<void> deleteRecord(String id) async {
-    await _ensureOpen();
-    final recordId = int.tryParse(id);
-    if (recordId == null) {
-      return;
-    }
-    await _executor.runCustom('DELETE FROM memory_records WHERE id = ?;', [
-      recordId,
-    ]);
-  }
-
-  @override
-  Future<void> deleteAllRecords({String? scope, String? type}) async {
-    await _ensureOpen();
-    final where = <String>[];
-    final args = <Object?>[];
-    if (scope != null && scope.isNotEmpty) {
-      where.add('scope = ?');
-      args.add(scope);
-    }
-    if (type != null && type.isNotEmpty) {
-      where.add('type = ?');
-      args.add(type);
-    }
-    final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
-    await _executor.runCustom(
-      'DELETE FROM memory_records $whereClause;',
-      args,
-    );
-  }
-
-  @override
-  Future<List<MemoryRecord>> listRecords({
-    String? scope,
-    String? userId,
+  Future<List<MemoryItem>> listMemoryItems({
     String? type,
     DateTime? after,
     DateTime? before,
     int offset = 0,
-    int? limit,
-    bool includeSummaries = false,
+    int limit = 50,
     bool descending = false,
   }) async {
     await _ensureOpen();
-    final rows = await _listDetailRows(
-      scope: scope,
-      userId: userId,
-      type: type,
-      after: after,
-      before: before,
-      offset: offset,
-      limit: limit,
-      includeSummaries: includeSummaries,
-      descending: descending,
-    );
-    return rows.map(_recordFromRow).toList();
+    final where = <String>[];
+    final args = <Object?>[];
+    if (type != null && type.trim().isNotEmpty) {
+      where.add('type = ?');
+      args.add(type.trim());
+    }
+    if (after != null) {
+      where.add('timestamp > ?');
+      args.add(after.millisecondsSinceEpoch);
+    }
+    if (before != null) {
+      where.add('timestamp <= ?');
+      args.add(before.millisecondsSinceEpoch);
+    }
+    final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final orderDirection = descending ? 'DESC' : 'ASC';
+    final paginationClause = limit > 0
+        ? offset > 0
+              ? 'LIMIT $limit OFFSET $offset'
+              : 'LIMIT $limit'
+        : offset > 0
+        ? 'LIMIT -1 OFFSET $offset'
+        : '';
+    final rows = await _executor.runSelect('''
+SELECT id, type, source_id, content, timestamp
+FROM memory_items
+$whereClause
+ORDER BY timestamp $orderDirection
+$paginationClause;
+''', args);
+    return rows.map(_memoryItemFromRow).toList(growable: false);
   }
 
-  Future<DateTime?> getLatestSummaryTimestamp({
-    String? scope,
-    String? userId,
-  }) async {
+  Future<MemoryItem?> getMemoryItem(String id) async {
     await _ensureOpen();
-    final where = <String>['type = ?'];
-    final args = <Object?>[memorySummaryType];
-    if (scope != null && scope.isNotEmpty) {
-      where.add('scope = ?');
-      args.add(scope);
-    }
-    if (userId != null && userId.isNotEmpty) {
-      where.add('user_id = ?');
-      args.add(userId);
-    }
-    final rows = await _executor.runSelect('''
-SELECT MAX(timestamp) AS max_ts
-FROM memory_records
-WHERE ${where.join(' AND ')};
-''', args);
+    final rows = await _executor.runSelect(
+      '''
+SELECT id, type, source_id, content, timestamp
+FROM memory_items
+WHERE id = ?
+LIMIT 1;
+''',
+      [id],
+    );
     if (rows.isEmpty) {
       return null;
     }
-    final value = rows.first['max_ts'];
-    if (value is int) {
-      return DateTime.fromMillisecondsSinceEpoch(value);
-    }
-    return null;
+    return _memoryItemFromRow(rows.first);
   }
 
-  Future<List<String>> listScopes() async {
-    await _ensureOpen();
-    final rows = await _executor.runSelect('''
-SELECT DISTINCT scope
-FROM memory_records
-WHERE scope IS NOT NULL AND scope != ''
-ORDER BY scope ASC;
-''', const []);
-    return rows
-        .map((row) => row['scope'])
-        .whereType<String>()
-        .where((value) => value.trim().isNotEmpty)
+  Future<void> saveMemorySummaries(
+    MemorySummaryBucket bucket,
+    List<MemorySummary> summaries,
+  ) {
+    return _savePipelineState('memory_summaries_${bucket.name}', {
+      'items': summaries.map((summary) => summary.toJson()).toList(),
+    });
+  }
+
+  Future<List<MemorySummary>> getMemorySummaries(
+    MemorySummaryBucket bucket,
+  ) async {
+    final payload = await _loadPipelineState('memory_summaries_${bucket.name}');
+    if (payload == null) {
+      return const [];
+    }
+    final items = payload['items'];
+    if (items is! List) {
+      return const [];
+    }
+    return items
+        .whereType<Map>()
+        .map(
+          (item) => MemorySummary.fromJson(
+            Map<String, dynamic>.from(item.cast<String, dynamic>()),
+          ),
+        )
+        .where((summary) => summary.id.isNotEmpty && summary.text.isNotEmpty)
         .toList(growable: false);
   }
 
-  List<MemoryRecord> _listSummariesSync(List<Map<String, Object?>> rows) {
-    return rows.map(_recordFromRow).toList();
-  }
-
-  Future<List<MemoryRecord>> listSummaryRecords({
-    String? scope,
-    String? userId,
-    int? limit,
-    DateTime? after,
-    DateTime? before,
-  }) async {
-    await _ensureOpen();
-    final where = <String>['type = ?'];
-    final args = <Object?>[memorySummaryType];
-    if (scope != null && scope.isNotEmpty) {
-      where.add('scope = ?');
-      args.add(scope);
-    }
-    if (userId != null && userId.isNotEmpty) {
-      where.add('user_id = ?');
-      args.add(userId);
-    }
-    if (after != null) {
-      where.add('timestamp > ?');
-      args.add(after.millisecondsSinceEpoch);
-    }
-    if (before != null) {
-      where.add('timestamp <= ?');
-      args.add(before.millisecondsSinceEpoch);
-    }
-    final limitClause = (limit == null || limit <= 0) ? '' : 'LIMIT $limit';
-    final rows = await _executor.runSelect('''
-SELECT
-  id,
-  job_id,
-  user_id,
-  session_id,
-  scope,
-  type,
-  data_json,
-  timestamp
-FROM memory_records
-WHERE ${where.join(' AND ')}
-ORDER BY timestamp DESC
-$limitClause;
-''', args);
-    final summaries = _listSummariesSync(rows);
-    return summaries..sort((a, b) => a.timestamp.compareTo(b.timestamp));
-  }
-
-  Future<MemoryRecord?> getLatestStateRecord({
-    required String type,
-    String? scope,
-    String? userId,
-  }) async {
-    await _ensureOpen();
-    final where = <String>['type = ?'];
-    final args = <Object?>[type];
-    if (scope != null && scope.isNotEmpty) {
-      where.add('scope = ?');
-      args.add(scope);
-    }
-    if (userId != null && userId.isNotEmpty) {
-      where.add('user_id = ?');
-      args.add(userId);
-    }
-    final rows = await _executor.runSelect('''
-SELECT
-  id,
-  job_id,
-  user_id,
-  session_id,
-  scope,
-  type,
-  data_json,
-  timestamp
-FROM memory_records
-WHERE ${where.join(' AND ')}
-ORDER BY timestamp DESC
-LIMIT 1;
-''', args);
-    if (rows.isEmpty) {
-      return null;
-    }
-    return _recordFromRow(rows.first);
-  }
-
-  Future<void> deleteDetailRecordsBefore({
-    required DateTime before,
-    String? scope,
-    String? userId,
-  }) async {
-    await _ensureOpen();
-    final where = <String>['timestamp <= ?', 'type NOT IN (?, ?, ?)'];
-    final args = <Object?>[
-      before.millisecondsSinceEpoch,
-      memorySummaryType,
-      shortTermMemoryType,
-      longTermMemoryType,
-    ];
-    if (scope != null && scope.isNotEmpty) {
-      where.add('scope = ?');
-      args.add(scope);
-    }
-    if (userId != null && userId.isNotEmpty) {
-      where.add('user_id = ?');
-      args.add(userId);
-    }
-    await _executor.runCustom('''
-DELETE FROM memory_records
-WHERE ${where.join(' AND ')};
-''', args);
-  }
-
-  Future<void> deleteSummaryRecordsBefore({
-    required DateTime before,
-    String? scope,
-    String? userId,
-  }) async {
-    await _ensureOpen();
-    final where = <String>['timestamp <= ?', 'type = ?'];
-    final args = <Object?>[before.millisecondsSinceEpoch, memorySummaryType];
-    if (scope != null && scope.isNotEmpty) {
-      where.add('scope = ?');
-      args.add(scope);
-    }
-    if (userId != null && userId.isNotEmpty) {
-      where.add('user_id = ?');
-      args.add(userId);
-    }
-    await _executor.runCustom('''
-DELETE FROM memory_records
-WHERE ${where.join(' AND ')};
-''', args);
-  }
-
-  Future<void> pruneStateRecords({
-    required String type,
-    int keepLatest = 3,
-    String? scope,
-    String? userId,
-  }) async {
-    await _ensureOpen();
-    if (keepLatest < 0) {
-      keepLatest = 0;
-    }
-    final where = <String>['type = ?'];
-    final args = <Object?>[type];
-    if (scope != null && scope.isNotEmpty) {
-      where.add('scope = ?');
-      args.add(scope);
-    }
-    if (userId != null && userId.isNotEmpty) {
-      where.add('user_id = ?');
-      args.add(userId);
-    }
-    final offsetClause = 'LIMIT -1 OFFSET $keepLatest';
-    await _executor.runCustom('''
-DELETE FROM memory_records
-WHERE id IN (
-  SELECT id
-  FROM memory_records
-  WHERE ${where.join(' AND ')}
-  ORDER BY timestamp DESC
-  $offsetClause
-);
-''', args);
-  }
-
-  Future<List<Map<String, Object?>>> _listDetailRows({
-    String? scope,
-    String? userId,
-    String? type,
-    DateTime? after,
-    DateTime? before,
+  Future<List<MemorySummary>> listMemorySummaries({
+    MemorySummaryBucket? bucket,
     int offset = 0,
-    int? limit,
-    bool includeSummaries = false,
-    bool descending = false,
-  }) {
-    final where = <String>[];
-    final args = <Object?>[];
-    if (!includeSummaries) {
-      where.add('type NOT IN (?, ?, ?)');
-      args.add(memorySummaryType);
-      args.add(shortTermMemoryType);
-      args.add(longTermMemoryType);
+    int limit = 50,
+  }) async {
+    final all = bucket == null
+        ? <MemorySummary>[
+            for (final value in MemorySummaryBucket.values)
+              ...await getMemorySummaries(value),
+          ]
+        : await getMemorySummaries(bucket);
+    all.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    if (offset >= all.length) {
+      return const [];
     }
-    if (scope != null && scope.isNotEmpty) {
-      where.add('scope = ?');
-      args.add(scope);
+    final paged = all.skip(offset);
+    if (limit <= 0) {
+      return paged.toList(growable: false);
     }
-    if (userId != null && userId.isNotEmpty) {
-      where.add('user_id = ?');
-      args.add(userId);
-    }
-    if (type != null && type.isNotEmpty) {
-      where.add('type = ?');
-      args.add(type);
-    }
-    if (after != null) {
-      where.add('timestamp > ?');
-      args.add(after.millisecondsSinceEpoch);
-    }
-    if (before != null) {
-      where.add('timestamp <= ?');
-      args.add(before.millisecondsSinceEpoch);
-    }
-    final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
-    final limitClause = (limit == null || limit <= 0) ? '' : 'LIMIT $limit';
-    final offsetClause = offset <= 0 ? '' : 'OFFSET $offset';
-    final orderDirection = descending ? 'DESC' : 'ASC';
-    return _executor.runSelect('''
-SELECT
-  id,
-  job_id,
-  user_id,
-  session_id,
-  scope,
-  type,
-  data_json,
-  timestamp
-FROM memory_records
-$whereClause
-ORDER BY timestamp $orderDirection
-$limitClause
-$offsetClause;
-''', args);
+    return paged.take(limit).toList(growable: false);
   }
 
-  MemoryRecord _recordFromRow(Map<String, Object?> row) {
-    final timestamp = row['timestamp'] as int? ?? 0;
-    return MemoryRecord(
-      id: (row['id'] as int?)?.toString(),
-      jobId: row['job_id'] as String,
-      userId: row['user_id'] as String?,
-      sessionId: row['session_id'] as String?,
-      scope: row['scope'] as String?,
-      type: row['type'] as String,
-      data: _decodeJson(row['data_json'] as String?),
-      timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp),
+  Future<List<MemorySummaryIndexEntry>> getMemorySummaryIndexEntries() async {
+    final payload = await _loadPipelineState('memory_summary_index_entries');
+    if (payload == null) {
+      return const [];
+    }
+    final items = payload['items'];
+    if (items is! List) {
+      return const [];
+    }
+    return items
+        .whereType<Map>()
+        .map(
+          (item) => MemorySummaryIndexEntry.fromJson(
+            Map<String, dynamic>.from(item.cast<String, dynamic>()),
+          ),
+        )
+        .where(
+          (entry) =>
+              entry.summaryId.isNotEmpty &&
+              entry.segmentId.isNotEmpty &&
+              entry.contentFingerprint.isNotEmpty,
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> saveMemorySummaryIndexEntries(
+    List<MemorySummaryIndexEntry> entries,
+  ) {
+    return _savePipelineState('memory_summary_index_entries', {
+      'items': entries.map((entry) => entry.toJson()).toList(),
+    });
+  }
+
+  Future<void> deleteMemoryItem(String id) async {
+    await _ensureOpen();
+    await _executor.runCustom('DELETE FROM memory_items WHERE id = ?;', [id]);
+  }
+
+  Future<void> deleteMemorySummary(String id) async {
+    await _ensureOpen();
+    for (final bucket in MemorySummaryBucket.values) {
+      final items = await getMemorySummaries(bucket);
+      final filtered = items
+          .where((item) => item.id != id)
+          .toList(growable: false);
+      if (filtered.length != items.length) {
+        await saveMemorySummaries(bucket, filtered);
+        return;
+      }
+    }
+  }
+
+  Future<void> _savePipelineState(
+    String key,
+    Map<String, dynamic> value,
+  ) async {
+    await _ensureOpen();
+    await _executor.runCustom(
+      '''
+INSERT INTO memory_pipeline_state (key, value_json)
+VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json;
+''',
+      [key, jsonEncode(value)],
     );
   }
 
-  String? _encodeJson(Map<String, dynamic>? data) {
-    if (data == null) {
+  Future<Map<String, dynamic>?> _loadPipelineState(String key) async {
+    await _ensureOpen();
+    final rows = await _executor.runSelect(
+      '''
+SELECT value_json
+FROM memory_pipeline_state
+WHERE key = ?
+LIMIT 1;
+''',
+      [key],
+    );
+    if (rows.isEmpty) {
       return null;
     }
-    try {
-      return jsonEncode(data);
-    } catch (error) {
-      return jsonEncode({'_raw': data.toString(), '_error': error.toString()});
-    }
+    return _decodeJson(rows.first['value_json'] as String?);
+  }
+
+  MemoryItem _memoryItemFromRow(Map<String, Object?> row) {
+    final timestamp = row['timestamp'] as int? ?? 0;
+    return MemoryItem(
+      id: row['id'] as String? ?? '',
+      type: row['type'] as String? ?? '',
+      sourceId: row['source_id'] as String? ?? '',
+      content: row['content'] as String? ?? '',
+      timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp),
+    );
   }
 
   Map<String, dynamic>? _decodeJson(String? dataJson) {
@@ -467,64 +314,22 @@ $offsetClause;
     return null;
   }
 
-  _MemoryExtras _extractExtras(Map<String, dynamic>? data) {
-    if (data == null) {
-      return const _MemoryExtras();
-    }
-    return _MemoryExtras(
-      bundleId: _stringFromKeys(data, const ['bundleId', 'bundle_id']),
-      taskId: _stringFromKeys(data, const ['taskId', 'task_id']),
-      liteAgentSessionId: _stringFromKeys(data, const [
-        'liteAgentSessionId',
-        'liteagentSessionId',
-        'liteagent_session_id',
-      ]),
-      messageIndex: _intFromKeys(data, const ['messageIndex', 'message_index']),
+  String _renderAgentMemoryEntry({
+    required String taskId,
+    required String actorId,
+    required AgentMemoryActorType actorType,
+    required List<String> content,
+    required DateTime timestamp,
+  }) {
+    final buffer = StringBuffer();
+    buffer.writeln(
+      '$actorId(${actorType.name}) ${timestamp.toUtc().toIso8601String()} [$taskId]:',
     );
-  }
-
-  String? _stringFromKeys(Map<String, dynamic> data, List<String> keys) {
-    for (final key in keys) {
-      final value = data[key];
-      if (value is String && value.trim().isNotEmpty) {
-        return value;
-      }
+    for (final line in content) {
+      buffer.writeln(line);
     }
-    return null;
+    return buffer.toString().trim();
   }
-
-  int? _intFromKeys(Map<String, dynamic> data, List<String> keys) {
-    for (final key in keys) {
-      final value = data[key];
-      if (value is int) {
-        return value;
-      }
-      if (value is num) {
-        return value.toInt();
-      }
-      if (value is String) {
-        final parsed = int.tryParse(value);
-        if (parsed != null) {
-          return parsed;
-        }
-      }
-    }
-    return null;
-  }
-}
-
-class _MemoryExtras {
-  final String? bundleId;
-  final String? taskId;
-  final String? liteAgentSessionId;
-  final int? messageIndex;
-
-  const _MemoryExtras({
-    this.bundleId,
-    this.taskId,
-    this.liteAgentSessionId,
-    this.messageIndex,
-  });
 }
 
 class _MemoryDbUser implements QueryExecutorUser {
@@ -549,48 +354,23 @@ class _MemoryDbUser implements QueryExecutorUser {
 
   Future<void> _createSchema(QueryExecutor executor) async {
     await executor.runCustom('''
-CREATE TABLE IF NOT EXISTS memory_records (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  job_id TEXT NOT NULL,
-  user_id TEXT,
-  session_id TEXT,
-  scope TEXT,
+CREATE TABLE IF NOT EXISTS memory_items (
+  id TEXT PRIMARY KEY,
   type TEXT NOT NULL,
-  data_json TEXT,
-  timestamp INTEGER NOT NULL,
-  bundle_id TEXT,
-  task_id TEXT,
-  liteagent_session_id TEXT,
-  message_index INTEGER
+  source_id TEXT NOT NULL,
+  content TEXT NOT NULL,
+  timestamp INTEGER NOT NULL
 );
 ''');
     await executor.runCustom('''
-CREATE INDEX IF NOT EXISTS memory_records_scope_ts
-  ON memory_records (scope, timestamp);
+CREATE INDEX IF NOT EXISTS memory_items_type_ts
+  ON memory_items (type, timestamp);
 ''');
     await executor.runCustom('''
-CREATE INDEX IF NOT EXISTS memory_records_scope_type_ts
-  ON memory_records (scope, type, timestamp);
-''');
-    await executor.runCustom('''
-CREATE INDEX IF NOT EXISTS memory_records_user_ts
-  ON memory_records (user_id, timestamp);
-''');
-    await executor.runCustom('''
-CREATE INDEX IF NOT EXISTS memory_records_session_ts
-  ON memory_records (session_id, timestamp);
-''');
-    await executor.runCustom('''
-CREATE INDEX IF NOT EXISTS memory_records_bundle_ts
-  ON memory_records (bundle_id, timestamp);
-''');
-    await executor.runCustom('''
-CREATE INDEX IF NOT EXISTS memory_records_task_id
-  ON memory_records (task_id);
-''');
-    await executor.runCustom('''
-CREATE INDEX IF NOT EXISTS memory_records_liteagent_session_ts
-  ON memory_records (liteagent_session_id, timestamp);
+CREATE TABLE IF NOT EXISTS memory_pipeline_state (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL
+);
 ''');
   }
 }
