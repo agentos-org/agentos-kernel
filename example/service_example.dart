@@ -12,7 +12,6 @@ Future<void> main() async {
   final embeddingsApiKey = '<LITE_EMBEDDINGS_API_KEY>'; // optional
   final embeddingsDocsName = '<LITE_EMBEDDINGS_DOCS_NAME>';
   final embeddingsModel = '<EMBEDDINGS_MODEL>'; // optional
-  final embeddingsLlmModel = '<EMBEDDINGS_LLM_MODEL>'; // optional
   final opentoolDaemonHost = '<OPENTOOL_DAEMON_HOST>';
   final opentoolDaemonApiKey = '<OPENTOOL_DAEMON_API_KEY>';
   const opentoolDaemonPort = 8080;
@@ -82,7 +81,6 @@ Future<void> main() async {
         apiKey: _optionalValue(embeddingsApiKey),
         docsName: embeddingsDocsName,
         model: _optionalValue(embeddingsModel),
-        llmModel: _optionalValue(embeddingsLlmModel),
       ),
     );
     print('Phase 5: embeddings updated: $ok');

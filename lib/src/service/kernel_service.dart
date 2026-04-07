@@ -53,17 +53,17 @@ class LlmConfigGroup {
 
 class EmbeddingsConfig {
   final String baseUrl;
+  final String? embeddingModelBaseUrl;
   final String? apiKey;
   final String docsName;
   final String? model;
-  final String? llmModel;
 
   const EmbeddingsConfig({
     required this.baseUrl,
+    this.embeddingModelBaseUrl,
     this.apiKey,
     required this.docsName,
     this.model,
-    this.llmModel,
   });
 }
 
@@ -382,21 +382,11 @@ class KernelService {
       bearerToken: config.embeddings.apiKey,
     );
     TextQueryVectorStore embeddingsVectorStore;
-    embeddings.LLMConfig? embeddingsLlmConfig;
-    if (llmModels.isNotEmpty) {
+    embeddings.LLMConfig? embeddingsLlmConfig = _buildEmbeddingsLlmConfig(
+      config.embeddings,
+    );
+    if (embeddingsLlmConfig != null) {
       try {
-        final embeddingsModel = _resolveEmbeddingsLlmModel(
-          llmModels,
-          config.embeddings.llmModel,
-        );
-        embeddingsLlmConfig = embeddings.LLMConfig(
-          baseUrl: embeddingsModel.baseUrl,
-          apiKey: embeddingsModel.apiKey ?? '',
-          model: _resolveEmbeddingsModel(
-            config.embeddings.model,
-            embeddingsModel.model,
-          ),
-        );
         final embeddingsDocsId = await _ensureDocsId(
           embeddingsClient,
           config.embeddings.docsName,
@@ -1239,17 +1229,8 @@ class KernelService {
       throw StateError('Embeddings config is not managed by KernelService.');
     }
 
-    final pool = _llmConfigPool;
-    if (pool == null || pool.configs.isEmpty) {
-      vectorStore.delegate = ThrowingTextQueryVectorStore();
-      _memorySummaryIndexer = null;
-      _kernel.memoryPipeline.indexer = null;
-      await _kernel.rag.configureEmbeddings(client: null, llmConfig: null);
-      return false;
-    }
-
-    final candidate = _resolveEmbeddingsLlmConfig(config, pool);
-    if (candidate == null) {
+    final embeddingsLlmConfig = _buildEmbeddingsLlmConfig(config);
+    if (embeddingsLlmConfig == null) {
       vectorStore.delegate = ThrowingTextQueryVectorStore();
       _memorySummaryIndexer = null;
       _kernel.memoryPipeline.indexer = null;
@@ -1261,10 +1242,13 @@ class KernelService {
       baseUrl: config.baseUrl,
       bearerToken: config.apiKey,
     );
-    final embeddingsLlmConfig = embeddings.LLMConfig(
-      baseUrl: candidate.baseUrl,
-      apiKey: candidate.apiKey ?? '',
-      model: _resolveEmbeddingsModel(config.model, candidate.model),
+
+    _logger?.warn(
+      'KernelService updateEmbeddingsConfig: '
+      'baseUrl=${config.baseUrl}, '
+      'embeddingModelBaseUrl=${config.embeddingModelBaseUrl}, '
+      'docsName=${config.docsName}, '
+      'model=${config.model}',
     );
 
     try {
@@ -1300,31 +1284,29 @@ class KernelService {
         llmConfig: embeddingsLlmConfig,
       );
       _restartEmbeddingsHealthMonitoring(config.baseUrl);
+      _logger?.warn(
+        'KernelService updateEmbeddingsConfig: configured successfully '
+        'docsName=${config.docsName} model=${config.model}',
+      );
       return true;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _logger?.warn(
+        'KernelService updateEmbeddingsConfig failed.',
+        data: {
+          'error': error.toString(),
+          'stackTrace': stackTrace.toString(),
+          'baseUrl': config.baseUrl,
+          'embeddingModelBaseUrl': config.embeddingModelBaseUrl,
+          'docsName': config.docsName,
+          'model': config.model,
+        },
+      );
       vectorStore.delegate = ThrowingTextQueryVectorStore();
       _memorySummaryIndexer = null;
       _kernel.memoryPipeline.indexer = null;
       await _kernel.rag.configureEmbeddings(client: null, llmConfig: null);
       return false;
     }
-  }
-
-  LLMConfig? _resolveEmbeddingsLlmConfig(
-    EmbeddingsConfig config,
-    LlmConfigPool pool,
-  ) {
-    final preferred = config.llmModel?.trim();
-    if (preferred != null && preferred.isNotEmpty) {
-      for (final candidate in pool.configs) {
-        if (candidate.model == preferred) {
-          return candidate;
-        }
-      }
-      return null;
-    }
-    final available = getAvailableLlmConfig();
-    return available ?? pool.pick();
   }
 
   void _restartEmbeddingsHealthMonitoring(String baseUrl) {
@@ -2057,29 +2039,19 @@ String _memorySummaryTimeFamily(String timeGroup) {
   }
 }
 
-KernelLlmModel _resolveEmbeddingsLlmModel(
-  List<KernelLlmModel> models,
-  String? embeddingsModel,
-) {
-  if (models.isEmpty) {
-    throw ArgumentError('llmModels is required.');
+embeddings.LLMConfig? _buildEmbeddingsLlmConfig(EmbeddingsConfig config) {
+  final model = config.model?.trim();
+  if (model == null || model.isEmpty) {
+    return null;
   }
-  if (embeddingsModel == null || embeddingsModel.trim().isEmpty) {
-    return models.first;
-  }
-  for (final model in models) {
-    if (model.model == embeddingsModel) {
-      return model;
-    }
-  }
-  throw ArgumentError('embeddingsLlmModel is not found in llmModels.');
-}
-
-String _resolveEmbeddingsModel(String? model, String fallback) {
-  if (model == null || model.trim().isEmpty) {
-    return fallback;
-  }
-  return model;
+  final embeddingModelBaseUrl = config.embeddingModelBaseUrl?.trim();
+  return embeddings.LLMConfig(
+    baseUrl: embeddingModelBaseUrl != null && embeddingModelBaseUrl.isNotEmpty
+        ? embeddingModelBaseUrl
+        : config.baseUrl,
+    apiKey: config.apiKey ?? '',
+    model: model,
+  );
 }
 
 bool _isModelAvailable(Supervision supervision, LLMConfig config) {

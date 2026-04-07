@@ -277,7 +277,6 @@ Future<void> main() async {
       baseUrl: '<LITE_EMBEDDINGS_BASE_URL>',
       docsName: '<LITE_EMBEDDINGS_DOCS_NAME>',
       model: '<EMBEDDINGS_MODEL>',
-      llmModel: '<EMBEDDINGS_LLM_MODEL>',
     ),
   );
 
@@ -312,7 +311,6 @@ Future<void> main() async {
       baseUrl: '<LITE_EMBEDDINGS_BASE_URL>',
       docsName: '<LITE_EMBEDDINGS_DOCS_NAME>',
       model: '<EMBEDDINGS_MODEL>',
-      llmModel: '<EMBEDDINGS_LLM_MODEL>',
     ),
   );
 
