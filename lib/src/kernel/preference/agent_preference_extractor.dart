@@ -8,7 +8,6 @@ import '../agent/config.dart';
 import '../agent/llm_queue.dart';
 import '../agent/liteagent_client.dart';
 import '../agent/model.dart';
-import '../content/content_normalizer.dart';
 import 'model.dart';
 import 'preference.dart';
 import 'preference_extractor.dart';
@@ -45,7 +44,7 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
       model: effectiveConfig.model,
       apiKey: effectiveConfig.apiKey,
     );
-    final taskContent = _buildTaskContent(record, effectiveConfig);
+    final taskContent = _buildTaskContent(record);
     try {
       final preferences = await llmQueue.enqueue(
         purpose: 'preference_extraction',
@@ -95,16 +94,22 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
     }
   }
 
-  List<Content> _buildTaskContent(
-    PreferenceSourceRecord record,
-    LLMConfig llmConfig,
-  ) {
-    final normalizedData = normalizeStructuredDataForModel(
-      record.data,
-      llmConfig,
-    );
-    final content = contentFromStructuredData(record.data, llmConfig);
-    final extraData = omitStructuredContent(normalizedData);
+  List<Content> _buildTaskContent(PreferenceSourceRecord record) {
+    final rawContent = record.data?['content'];
+    final contentLines = rawContent is List
+        ? rawContent
+              .whereType<String>()
+              .map((item) => item.trim())
+              .where((item) => item.isNotEmpty)
+              .toList(growable: false)
+        : const <String>[];
+    final extraData = record.data == null
+        ? null
+        : () {
+            final next = Map<String, dynamic>.from(record.data!);
+            next.remove('content');
+            return next.isEmpty ? null : next;
+          }();
     final intro = StringBuffer();
     intro.writeln('You extract stable user preferences.');
     intro.writeln('Call generate_preference with a text array.');
@@ -113,23 +118,19 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
     final taskContent = <Content>[
       Content(type: ContentType.text, message: intro.toString()),
     ];
-    if (content.isNotEmpty) {
-      taskContent.addAll(content);
+    if (contentLines.isNotEmpty) {
+      taskContent.add(
+        Content(
+          type: ContentType.text,
+          message: 'Event content:\n${contentLines.join('\n\n')}',
+        ),
+      );
     }
     if (extraData != null && extraData.isNotEmpty) {
       taskContent.add(
         Content(
           type: ContentType.text,
           message: 'Event data: ${jsonEncode(extraData)}',
-        ),
-      );
-    } else if (content.isEmpty &&
-        normalizedData != null &&
-        normalizedData.isNotEmpty) {
-      taskContent.add(
-        Content(
-          type: ContentType.text,
-          message: 'Event data: ${jsonEncode(normalizedData)}',
         ),
       );
     }

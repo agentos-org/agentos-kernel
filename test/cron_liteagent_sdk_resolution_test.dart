@@ -432,48 +432,54 @@ void main() {
       },
     );
 
-    test('executor falls back to empty daemon catalog when resolver fails', () async {
-      final sdk = _RecordingLiteAgentSdk(
-        sessionId: 'fallback-session',
-        responseText: 'fallback-response',
-      );
-      final executor = AgentCronExecutor(
-        sdk: sdk,
-        llmConfigResolver: () => LLMConfig(
-          baseUrl: 'http://127.0.0.1:9000',
-          apiKey: 'test-key',
-          model: 'qwen-test',
-        ),
-        llmConfigListResolver: () => const <LLMConfig>[],
-        daemonToolCatalogResolver: () async {
-          throw StateError('daemon load returned 404');
-        },
-      );
-      final task = CronTaskDefinition(
-        cronId: 'cron-fallback',
-        name: 'fallback-report',
-        schedule: '*/5 * * * *',
-        source: 'api',
-        concurrency: CronTaskConcurrencyPolicy.skipIfRunning,
-        spec: AgentCronSpec(
-          systemPrompt: 'You are a cron agent.',
-          content: [
-            Content(type: ContentType.text, message: 'Generate fallback output.'),
-          ],
-        ),
-        createdAt: DateTime(2026, 1, 1),
-        updatedAt: DateTime(2026, 1, 1),
-        status: CronTaskStatus.active,
-      );
+    test(
+      'executor falls back to empty daemon catalog when resolver fails',
+      () async {
+        final sdk = _RecordingLiteAgentSdk(
+          sessionId: 'fallback-session',
+          responseText: 'fallback-response',
+        );
+        final executor = AgentCronExecutor(
+          sdk: sdk,
+          llmConfigResolver: () => LLMConfig(
+            baseUrl: 'http://127.0.0.1:9000',
+            apiKey: 'test-key',
+            model: 'qwen-test',
+          ),
+          llmConfigListResolver: () => const <LLMConfig>[],
+          daemonToolCatalogResolver: () async {
+            throw StateError('daemon load returned 404');
+          },
+        );
+        final task = CronTaskDefinition(
+          cronId: 'cron-fallback',
+          name: 'fallback-report',
+          schedule: '*/5 * * * *',
+          source: 'api',
+          concurrency: CronTaskConcurrencyPolicy.skipIfRunning,
+          spec: AgentCronSpec(
+            systemPrompt: 'You are a cron agent.',
+            content: [
+              Content(
+                type: ContentType.text,
+                message: 'Generate fallback output.',
+              ),
+            ],
+          ),
+          createdAt: DateTime(2026, 1, 1),
+          updatedAt: DateTime(2026, 1, 1),
+          status: CronTaskStatus.active,
+        );
 
-      final result = await executor.run(task);
+        final result = await executor.run(task);
 
-      expect(result.success, isTrue);
-      expect(result.liteAgentSessionId, 'fallback-session');
-      expect(result.result?['content'], 'fallback-response');
-      expect(sdk.lastCapability, isNotNull);
-      expect(sdk.lastCapability!.callbackOpenTool, isNotNull);
-    });
+        expect(result.success, isTrue);
+        expect(result.liteAgentSessionId, 'fallback-session');
+        expect(result.result?['content'], 'fallback-response');
+        expect(sdk.lastCapability, isNotNull);
+        expect(sdk.lastCapability!.callbackOpenTool, isNotNull);
+      },
+    );
   });
 }
 
@@ -648,7 +654,10 @@ class _RecordingModeAwareDaemonClient extends DaemonClient {
   _RecordingModeAwareDaemonClient() : super(host: '127.0.0.1', port: 19627);
 
   @override
-  Future<ot.ToolReturn> callTool(String toolId, ot.FunctionCall functionCall) async {
+  Future<ot.ToolReturn> callTool(
+    String toolId,
+    ot.FunctionCall functionCall,
+  ) async {
     callCount += 1;
     return ot.ToolReturn(
       id: functionCall.id,

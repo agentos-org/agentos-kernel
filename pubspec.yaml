@@ -13,13 +13,10 @@ dependencies:
   json_annotation: ^4.9.0
   sqlite3: ^2.9.4
   dart_openai_sdk: ^6.0.0
-  lite_embeddings_sdk_dart:
-    path: ../lite_embeddings_sdk_dart
-  liteagent_sdk_dart:
-    path: ../liteagent_sdk_dart
+  lite_embeddings_sdk_dart: ^0.1.0
+  liteagent_sdk_dart: ^0.2.2
   opentool_dart: ^2.0.0
-  opentool_daemon:
-    path: ../opentool-hub/opentool-util-daemon
+  opentool_daemon: ^0.2.1
 
 dev_dependencies:
   build_runner: ^2.4.12

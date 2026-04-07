@@ -34,6 +34,10 @@ import '../kernel/preference/agent_preference_extractor.dart';
 import '../kernel/preference/preference_processor.dart';
 import '../kernel/preference/lite_embeddings_vector_store.dart';
 import '../kernel/preference/vector_store.dart';
+import '../kernel/rag/drift_rag.dart';
+import '../kernel/rag/markdown_segmenter.dart';
+import '../kernel/rag/model.dart';
+import '../kernel/rag/rag.dart';
 import '../kernel/supervision/model.dart';
 import '../kernel/supervision/model_profiler.dart';
 import '../kernel/supervision/supervision.dart';
@@ -66,6 +70,7 @@ class EmbeddingsConfig {
 class KernelRuntimeConfig {
   final String? memoryDbPath;
   final String? preferenceDbPath;
+  final String? ragDbPath;
   final String? modelProfilerDbPath;
   final String? cronDbPath;
   final Duration ttftThreshold;
@@ -85,6 +90,7 @@ class KernelRuntimeConfig {
   const KernelRuntimeConfig({
     this.memoryDbPath = '.hive/kernel_memory.sqlite',
     this.preferenceDbPath = '.hive/kernel_preference.sqlite',
+    this.ragDbPath = '.hive/kernel_rag.sqlite',
     this.modelProfilerDbPath = '.hive/kernel_model_profiles.sqlite',
     this.cronDbPath = '.hive/kernel_cron.sqlite',
     this.ttftThreshold = const Duration(milliseconds: 5000),
@@ -103,12 +109,29 @@ class KernelRuntimeConfig {
   });
 }
 
+class RagConfig {
+  final bool enabled;
+  final String docsNamePrefix;
+  final int defaultQueryLimit;
+  final int defaultCandidateLimit;
+  final RagSegmentationConfig segmentation;
+
+  const RagConfig({
+    this.enabled = true,
+    this.docsNamePrefix = 'rag',
+    this.defaultQueryLimit = 5,
+    this.defaultCandidateLimit = 20,
+    this.segmentation = const RagSegmentationConfig(),
+  });
+}
+
 class KernelServiceConfig {
   final LiteAgentSDK liteAgentSdk;
   final List<PresetOpenSpec>? presetOpenSpecList;
   final LlmConfigGroup? llm;
   final List<String>? preferenceSkills;
   final EmbeddingsConfig embeddings;
+  final RagConfig rag;
   final KernelRuntimeConfig runtime;
 
   const KernelServiceConfig({
@@ -117,6 +140,7 @@ class KernelServiceConfig {
     this.llm,
     this.preferenceSkills,
     required this.embeddings,
+    this.rag = const RagConfig(),
     this.runtime = const KernelRuntimeConfig(),
   });
 }
@@ -313,6 +337,7 @@ class KernelService {
           baseUrl: 'http://127.0.0.1:65534',
           docsName: 'bootstrap',
         ),
+        rag: const RagConfig(),
         runtime: runtime,
       ),
     );
@@ -400,6 +425,10 @@ class KernelService {
         (preferenceDbPath == null || preferenceDbPath.trim().isEmpty)
         ? '.hive/kernel_preference.sqlite'
         : preferenceDbPath.trim();
+    final ragDbPath = config.runtime.ragDbPath;
+    final resolvedRagDbPath = (ragDbPath == null || ragDbPath.trim().isEmpty)
+        ? '.hive/kernel_rag.sqlite'
+        : ragDbPath.trim();
     final modelProfilerDbPath = config.runtime.modelProfilerDbPath;
     final resolvedModelProfilerDbPath =
         (modelProfilerDbPath == null || modelProfilerDbPath.trim().isEmpty)
@@ -424,6 +453,15 @@ class KernelService {
     );
 
     final longTermMemory = DriftMemory.open(path: resolvedMemoryDbPath);
+    final ragStore = DriftRag.open(path: resolvedRagDbPath);
+    final rag = Rag(
+      store: ragStore,
+      segmenter: MarkdownSegmenter(config: config.rag.segmentation),
+      logger: logger,
+      docsNamePrefix: config.rag.docsNamePrefix,
+      client: embeddingsLlmConfig == null ? null : embeddingsClient,
+      llmConfig: embeddingsLlmConfig,
+    );
     MemorySummarizer? memorySummarizer;
     MemorySummaryIndexer? memorySummaryIndexer;
     if (embeddingsLlmConfig != null) {
@@ -477,6 +515,7 @@ class KernelService {
       memoryPipeline: memoryPipeline,
       preference: preference,
       preferenceExtractor: preferenceExtractorSwitch,
+      rag: rag,
     );
 
     var memorySummarizerStarted = false;
@@ -663,6 +702,173 @@ class KernelService {
         ),
       );
     }
+  }
+
+  Future<RagBaseDto> createRagBase({
+    String? baseId,
+    required String name,
+    Map<String, dynamic>? metadata,
+  }) async {
+    final base = await _kernel.rag.createBase(
+      baseId: baseId,
+      name: name,
+      metadata: metadata,
+    );
+    return _toRagBaseDto(base);
+  }
+
+  Future<RagBaseDto> getRagBase(String baseId) async {
+    return _toRagBaseDto(await _kernel.rag.getBase(baseId));
+  }
+
+  Future<List<RagBaseListItemDto>> listRagBases({
+    int offset = 0,
+    int limit = 50,
+  }) async {
+    final bases = await _kernel.rag.listBases(offset: offset, limit: limit);
+    return bases.map(_toRagBaseListItemDto).toList(growable: false);
+  }
+
+  Future<RagBaseDto> updateRagBase({
+    required String baseId,
+    String? name,
+    Map<String, dynamic>? metadata,
+  }) async {
+    final base = await _kernel.rag.updateBase(
+      baseId: baseId,
+      name: name,
+      metadata: metadata,
+    );
+    return _toRagBaseDto(base);
+  }
+
+  Future<void> deleteRagBase(String baseId) {
+    return _kernel.rag.deleteBase(baseId);
+  }
+
+  Future<RagDocumentDto> upsertRagMarkdownDocument({
+    required String baseId,
+    required String documentId,
+    required String title,
+    required String markdown,
+    Map<String, dynamic>? metadata,
+    bool sync = true,
+  }) async {
+    final document = await _kernel.rag.upsertMarkdownDocument(
+      baseId: baseId,
+      documentId: documentId,
+      title: title,
+      markdown: markdown,
+      metadata: metadata,
+      sync: sync,
+    );
+    return _toRagDocumentDto(document);
+  }
+
+  Future<RagBatchResultDto> upsertRagMarkdownDocuments({
+    required String baseId,
+    required List<RagMarkdownDocumentInputDto> documents,
+    bool sync = true,
+  }) async {
+    final items = <RagBatchItemResultDto>[];
+    for (final document in documents) {
+      try {
+        final result = await upsertRagMarkdownDocument(
+          baseId: baseId,
+          documentId: document.documentId,
+          title: document.title,
+          markdown: document.markdown,
+          metadata: document.metadata,
+          sync: sync,
+        );
+        items.add(
+          RagBatchItemResultDto(
+            baseId: baseId,
+            documentId: result.id,
+            status: RagBatchItemStatus.success.name,
+            syncStatus: result.syncStatus,
+          ),
+        );
+      } catch (error) {
+        items.add(
+          RagBatchItemResultDto(
+            baseId: baseId,
+            documentId: document.documentId,
+            status: RagBatchItemStatus.failed.name,
+            syncStatus: RagDocumentSyncStatus.failed.name,
+            message: error.toString(),
+          ),
+        );
+      }
+    }
+    return _buildRagBatchResultDto(items);
+  }
+
+  Future<RagDocumentDto> getRagDocument({
+    required String baseId,
+    required String documentId,
+  }) async {
+    final document = await _kernel.rag.getDocument(
+      baseId: baseId,
+      documentId: documentId,
+    );
+    return _toRagDocumentDto(document);
+  }
+
+  Future<List<RagDocumentListItemDto>> listRagDocuments({
+    required String baseId,
+    int offset = 0,
+    int limit = 50,
+  }) async {
+    final documents = await _kernel.rag.listDocuments(
+      baseId: baseId,
+      offset: offset,
+      limit: limit,
+    );
+    return documents.map(_toRagDocumentListItemDto).toList(growable: false);
+  }
+
+  Future<void> deleteRagDocument({
+    required String baseId,
+    required String documentId,
+  }) {
+    return _kernel.rag.deleteDocument(baseId: baseId, documentId: documentId);
+  }
+
+  Future<RagDocumentSyncResultDto> syncRagDocument({
+    required String baseId,
+    required String documentId,
+  }) async {
+    final result = await _kernel.rag.syncDocument(
+      baseId: baseId,
+      documentId: documentId,
+    );
+    return _toRagDocumentSyncResultDto(result);
+  }
+
+  Future<RagBatchResultDto> syncRagBase(String baseId) async {
+    return _toRagBatchResultDto(await _kernel.rag.syncBase(baseId));
+  }
+
+  Future<RagBatchResultDto> retryFailedRagDocuments({String? baseId}) async {
+    return _toRagBatchResultDto(
+      await _kernel.rag.retryFailedDocuments(baseId: baseId),
+    );
+  }
+
+  Future<RagQueryResultDto> queryRag({
+    required String baseId,
+    required String query,
+    int limit = 5,
+    int candidateLimit = 20,
+  }) async {
+    final result = await _kernel.rag.query(
+      baseId: baseId,
+      query: query,
+      limit: limit,
+      candidateLimit: candidateLimit,
+    );
+    return _toRagQueryResultDto(result);
   }
 
   Future<List<MemorySummary>> retrieveRelevantMemorySummaries(
@@ -1038,6 +1244,7 @@ class KernelService {
       vectorStore.delegate = ThrowingTextQueryVectorStore();
       _memorySummaryIndexer = null;
       _kernel.memoryPipeline.indexer = null;
+      await _kernel.rag.configureEmbeddings(client: null, llmConfig: null);
       return false;
     }
 
@@ -1046,6 +1253,7 @@ class KernelService {
       vectorStore.delegate = ThrowingTextQueryVectorStore();
       _memorySummaryIndexer = null;
       _kernel.memoryPipeline.indexer = null;
+      await _kernel.rag.configureEmbeddings(client: null, llmConfig: null);
       return false;
     }
 
@@ -1087,12 +1295,17 @@ class KernelService {
         _kernel.memoryPipeline.indexer = _memorySummaryIndexer;
         await _syncEmbeddingsIndexes();
       }
+      await _kernel.rag.configureEmbeddings(
+        client: embeddingsClient,
+        llmConfig: embeddingsLlmConfig,
+      );
       _restartEmbeddingsHealthMonitoring(config.baseUrl);
       return true;
     } catch (_) {
       vectorStore.delegate = ThrowingTextQueryVectorStore();
       _memorySummaryIndexer = null;
       _kernel.memoryPipeline.indexer = null;
+      await _kernel.rag.configureEmbeddings(client: null, llmConfig: null);
       return false;
     }
   }
@@ -1629,6 +1842,7 @@ class KernelService {
   Future<void> _syncEmbeddingsIndexes() async {
     await _syncMemorySummaryIndex();
     await _syncPreferenceIndex();
+    await _kernel.rag.syncAllDocuments();
   }
 
   OpenToolDaemonRegistry _resolveOpenToolDaemonRegistry() {
@@ -2285,4 +2499,131 @@ class _DaemonToolLifecycleEventType {
 
 class _DaemonToolStatusType {
   static const String running = 'running';
+}
+
+RagBaseDto _toRagBaseDto(RagBase base) {
+  return RagBaseDto(
+    id: base.id,
+    name: base.name,
+    docsName: base.docsName,
+    docsId: base.docsId,
+    metadata: base.metadata,
+    createdAt: base.createdAt,
+    updatedAt: base.updatedAt,
+  );
+}
+
+RagBaseListItemDto _toRagBaseListItemDto(RagBase base) {
+  return RagBaseListItemDto(
+    id: base.id,
+    name: base.name,
+    createdAt: base.createdAt,
+    updatedAt: base.updatedAt,
+  );
+}
+
+RagDocumentDto _toRagDocumentDto(RagDocument document) {
+  return RagDocumentDto(
+    id: document.id,
+    baseId: document.baseId,
+    title: document.title,
+    markdown: document.markdown,
+    contentHash: document.contentHash,
+    metadata: document.metadata,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt,
+    indexedAt: document.indexedAt,
+    syncStatus: document.syncStatus.name,
+  );
+}
+
+RagDocumentListItemDto _toRagDocumentListItemDto(RagDocument document) {
+  return RagDocumentListItemDto(
+    id: document.id,
+    baseId: document.baseId,
+    title: document.title,
+    updatedAt: document.updatedAt,
+    indexedAt: document.indexedAt,
+    syncStatus: document.syncStatus.name,
+  );
+}
+
+RagDocumentSyncResultDto _toRagDocumentSyncResultDto(
+  RagDocumentSyncResult result,
+) {
+  return RagDocumentSyncResultDto(
+    baseId: result.baseId,
+    documentId: result.documentId,
+    syncStatus: result.syncStatus.name,
+    keptCount: result.keptCount,
+    updatedCount: result.updatedCount,
+    insertedCount: result.insertedCount,
+    deletedCount: result.deletedCount,
+    syncedAt: result.syncedAt,
+  );
+}
+
+RagBatchResultDto _toRagBatchResultDto(RagBatchResult result) {
+  return RagBatchResultDto(
+    totalCount: result.totalCount,
+    successCount: result.successCount,
+    failedCount: result.failedCount,
+    skippedCount: result.skippedCount,
+    processedAt: result.processedAt,
+    items: result.items
+        .map(
+          (item) => RagBatchItemResultDto(
+            baseId: item.baseId,
+            documentId: item.documentId,
+            status: item.status.name,
+            syncStatus: item.syncStatus.name,
+            message: item.message,
+          ),
+        )
+        .toList(growable: false),
+  );
+}
+
+RagBatchResultDto _buildRagBatchResultDto(List<RagBatchItemResultDto> items) {
+  return RagBatchResultDto(
+    totalCount: items.length,
+    successCount: items
+        .where((item) => item.status == RagBatchItemStatus.success.name)
+        .length,
+    failedCount: items
+        .where((item) => item.status == RagBatchItemStatus.failed.name)
+        .length,
+    skippedCount: items
+        .where((item) => item.status == RagBatchItemStatus.skipped.name)
+        .length,
+    processedAt: DateTime.now(),
+    items: items,
+  );
+}
+
+RagQueryResultDto _toRagQueryResultDto(RagQueryResult result) {
+  return RagQueryResultDto(
+    baseId: result.baseId,
+    query: result.query,
+    hits: result.hits
+        .map(
+          (hit) => RagDocumentHitDto(
+            documentId: hit.documentId,
+            title: hit.title,
+            score: hit.score,
+            snippet: hit.snippet,
+            segments: hit.segments
+                .map(
+                  (segment) => RagSegmentHitDto(
+                    segmentId: segment.segmentId,
+                    score: segment.score,
+                    text: segment.text,
+                    headingPath: segment.headingPath,
+                  ),
+                )
+                .toList(growable: false),
+          ),
+        )
+        .toList(growable: false),
+  );
 }

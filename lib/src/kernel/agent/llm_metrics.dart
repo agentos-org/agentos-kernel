@@ -22,17 +22,17 @@ class SupervisionLlmMetricsSink {
     int weight = 1,
     String? jobId,
     String? userId,
-  })  : _supervision = supervision,
-        _modelKey = buildLlmModelKey(
-          baseUrl: baseUrl,
-          model: model,
-          apiKey: apiKey,
-        ),
-        _purpose = purpose,
-        _priority = priority,
-        _weight = weight,
-        _jobId = jobId,
-        _userId = userId;
+  }) : _supervision = supervision,
+       _modelKey = buildLlmModelKey(
+         baseUrl: baseUrl,
+         model: model,
+         apiKey: apiKey,
+       ),
+       _purpose = purpose,
+       _priority = priority,
+       _weight = weight,
+       _jobId = jobId,
+       _userId = userId;
 
   void onStarted(String requestId) {
     final meta = LlmRequestMeta(
@@ -129,11 +129,9 @@ class LlmMetrics {
   void setFirstToken(DateTime firstTokenAt) =>
       _sink.onFirstToken(requestId, firstTokenAt);
 
-  void setTokenPerSecond(double tps) =>
-      _sink.onTokenPerSecond(requestId, tps);
+  void setTokenPerSecond(double tps) => _sink.onTokenPerSecond(requestId, tps);
 
-  void completed(int totalTokens) =>
-      _sink.onCompleted(requestId, totalTokens);
+  void completed(int totalTokens) => _sink.onCompleted(requestId, totalTokens);
 
   void failed(String error) => _sink.onFailed(requestId, error);
 }
@@ -144,8 +142,5 @@ class _ExternalLlmRequestState {
   DateTime? firstTokenAt;
   double? tps;
 
-  _ExternalLlmRequestState({
-    required this.meta,
-    required this.startedAt,
-  });
+  _ExternalLlmRequestState({required this.meta, required this.startedAt});
 }

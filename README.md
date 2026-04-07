@@ -5,7 +5,9 @@ AgentOS Kernel is a service-first Dart package for:
 - storing raw memory as `MemoryItem`
 - generating summarized memory as `MemorySummary`
 - extracting user preferences as `PreferenceEntry`
+- managing markdown RAG knowledge as bases/documents
 - indexing memory/preferences into LiteEmbeddings
+- indexing RAG document segments into LiteEmbeddings
 - retrieving relevant context for runtime agent prompts
 - running cron-driven LiteAgent jobs
 - monitoring LiteAgent / OpenTool daemon / embeddings health
@@ -50,12 +52,23 @@ Preference extraction is also a background LLM task. New preference candidates a
 
 - Memory summaries are indexed into a single docs collection: `memory_summaries`
 - Preferences are indexed into a single docs collection: `preferences`
+- Each RAG base is indexed into its own docs collection
 - Embeddings health is monitored continuously
 - If embeddings are unavailable:
   - memory/preference generation still continues locally
+  - RAG documents still persist locally
   - VDB indexing is skipped
   - runtime retrieval returns empty results
 - When embeddings recover, the kernel automatically rebuilds missing indexes
+
+### RAG
+
+- Public abstraction: `RagBase` -> `RagDocument`
+- Source type: markdown only in the current version
+- Persistence: Drift / SQLite
+- Retrieval: LiteEmbeddings recall with document-level aggregation
+
+External callers provide whole markdown documents. Segment splitting, token estimation, and incremental segment sync are handled inside the kernel.
 
 ### Cron
 
@@ -110,6 +123,24 @@ Retrieve relevant derived context for a user instruction:
 - `preferences`
 
 If embeddings are down, it returns empty derived results with `embeddingsAvailable == false`.
+
+### RAG
+
+Manage markdown knowledge bases and query them semantically:
+
+- `createRagBase({String? baseId, required String name, Map<String, dynamic>? metadata})`
+- `getRagBase(String baseId)`
+- `listRagBases({int offset = 0, int limit = 50})`
+- `updateRagBase({required String baseId, String? name, Map<String, dynamic>? metadata})`
+- `deleteRagBase(String baseId)`
+- `upsertRagMarkdownDocument({required String baseId, required String documentId, required String title, required String markdown, Map<String, dynamic>? metadata, bool sync = true})`
+- `getRagDocument({required String baseId, required String documentId})`
+- `listRagDocuments({required String baseId, int offset = 0, int limit = 50})`
+- `deleteRagDocument({required String baseId, required String documentId})`
+- `syncRagDocument({required String baseId, required String documentId})`
+- `queryRag({required String baseId, required String query, int limit = 5, int candidateLimit = 20})`
+
+`upsertRagMarkdownDocument(...)` stores the full document and automatically re-segments and syncs the vector index by default.
 
 ### Health / Readiness
 
@@ -192,6 +223,7 @@ This repository now uses Drift / SQLite for its own persistence:
 
 - memory
 - preference
+- rag
 - cron
 - model profiler
 
@@ -201,6 +233,7 @@ Default local DB paths:
 
 - `.hive/kernel_memory.sqlite`
 - `.hive/kernel_preference.sqlite`
+- `.hive/kernel_rag.sqlite`
 - `.hive/kernel_model_profiles.sqlite`
 - `.hive/kernel_cron.sqlite`
 
@@ -260,5 +293,48 @@ Future<void> main() async {
   print('embeddingsAvailable=${context.embeddingsAvailable}');
   print('memorySummaries=${context.memorySummaries.length}');
   print('preferences=${context.preferences.length}');
+}
+```
+
+## Minimal RAG Example
+
+```dart
+import 'package:agentos_kernel/agentos_kernel.dart';
+
+Future<void> main() async {
+  final service = await KernelService.create();
+
+  await service.updateEmbeddingsConfig(
+    const EmbeddingsConfig(
+      baseUrl: '<LITE_EMBEDDINGS_BASE_URL>',
+      docsName: '<LITE_EMBEDDINGS_DOCS_NAME>',
+      model: '<EMBEDDINGS_MODEL>',
+      llmModel: '<EMBEDDINGS_LLM_MODEL>',
+    ),
+  );
+
+  final base = await service.createRagBase(name: 'product_docs');
+
+  await service.upsertRagMarkdownDocument(
+    baseId: base.id,
+    documentId: 'intro',
+    title: 'Introduction',
+    markdown: '''
+# Introduction
+
+AgentOS Kernel supports memory, preference, cron, and RAG modules.
+
+## RAG
+
+RAG documents are written as markdown and segmented automatically.
+''',
+  );
+
+  final result = await service.queryRag(
+    baseId: base.id,
+    query: 'How are RAG documents ingested?',
+  );
+
+  print('hits=${result.hits.length}');
 }
 ```

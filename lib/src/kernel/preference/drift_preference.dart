@@ -90,10 +90,7 @@ class DriftPreference implements Preference {
         text: trimmed,
         updatedAt: nextUpdatedAt,
       );
-      await _upsertEntry(
-        userId: normalizedUserId,
-        entry: created,
-      );
+      await _upsertEntry(userId: normalizedUserId, entry: created);
       changed.add(created);
     }
     return changed;

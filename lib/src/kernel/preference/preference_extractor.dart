@@ -33,9 +33,7 @@ class SwitchablePreferenceExtractor implements PreferenceExtractor {
 class ThrowingPreferenceExtractor implements PreferenceExtractor {
   final String message;
 
-  ThrowingPreferenceExtractor({
-    this.message = 'LLM models not configured.',
-  });
+  ThrowingPreferenceExtractor({this.message = 'LLM models not configured.'});
 
   @override
   Future<List<PreferenceEntry>> consume(PreferenceSourceRecord record) {

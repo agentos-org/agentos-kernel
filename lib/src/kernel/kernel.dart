@@ -3,6 +3,7 @@ import 'memory/memory_pipeline.dart';
 import 'opentool/opentool_daemon_registry.dart';
 import 'preference/preference.dart';
 import 'preference/preference_extractor.dart';
+import 'rag/rag.dart';
 import 'supervision/supervision.dart';
 
 class Kernel {
@@ -12,6 +13,7 @@ class Kernel {
   final MemoryPipeline memoryPipeline;
   final Preference preference;
   final PreferenceExtractor preferenceExtractor;
+  final Rag rag;
 
   const Kernel({
     required this.openToolDaemonRegistry,
@@ -20,5 +22,6 @@ class Kernel {
     required this.memoryPipeline,
     required this.preference,
     required this.preferenceExtractor,
+    required this.rag,
   });
 }

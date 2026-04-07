@@ -81,16 +81,17 @@ void main() {
           _toolInfo(id: 'tool-a', status: 'running'),
           _toolInfo(id: 'tool-b', status: 'running'),
         ],
-        loadTool: ({
-          required String host,
-          required int port,
-          required String toolId,
-        }) async {
-          if (toolId == 'tool-b') {
-            throw StateError('404');
-          }
-          return _buildTool('Tool A', 'search_a');
-        },
+        loadTool:
+            ({
+              required String host,
+              required int port,
+              required String toolId,
+            }) async {
+              if (toolId == 'tool-b') {
+                throw StateError('404');
+              }
+              return _buildTool('Tool A', 'search_a');
+            },
       );
 
       final catalog = await provider.resolveCatalog();

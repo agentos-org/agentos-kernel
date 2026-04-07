@@ -10,12 +10,7 @@ class SupervisionAdvice {
   });
 }
 
-enum ExternalServiceType {
-  llm,
-  liteagent,
-  opentoolDaemon,
-  embeddings,
-}
+enum ExternalServiceType { llm, liteagent, opentoolDaemon, embeddings }
 
 class ExternalServiceHealth {
   final String id;
@@ -66,14 +61,11 @@ class ExternalServiceHealth {
 class ExternalServiceHealthSnapshot {
   final Map<String, ExternalServiceHealth> items;
 
-  const ExternalServiceHealthSnapshot({
-    required this.items,
-  });
+  const ExternalServiceHealthSnapshot({required this.items});
 }
 
-typedef ExternalServiceHealthListener = void Function(
-  ExternalServiceHealth health,
-);
+typedef ExternalServiceHealthListener =
+    void Function(ExternalServiceHealth health);
 
 class ExternalServiceHealthSubscription {
   final void Function() _cancel;

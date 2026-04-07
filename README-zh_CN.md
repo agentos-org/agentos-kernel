@@ -5,7 +5,9 @@ AgentOS Kernel 是一个面向 Service 的 Dart 包，当前主要能力是：
 - 将原始记忆存为 `MemoryItem`
 - 将原始记忆提炼为 `MemorySummary`
 - 从原始记忆中提取用户偏好为 `PreferenceEntry`
+- 管理基于 markdown 的 RAG 知识库与文档
 - 将 memory / preference 建立到 LiteEmbeddings 索引
+- 将 RAG 文档分片建立到 LiteEmbeddings 索引
 - 在运行时按用户指令检索相关上下文
 - 运行基于 LiteAgent 的 cron 任务
 - 持续监控 LiteAgent / OpenTool daemon / embeddings 健康状态
@@ -50,12 +52,23 @@ preference 提取同样是后台 LLM 任务。新的 user/app memory 只会先�
 
 - memory summaries 建到一个 docs：`memory_summaries`
 - preferences 建到一个 docs：`preferences`
+- 每个 RAG base 会建立到各自独立的 docs
 - embeddings 健康状态会被持续监控
 - 如果 embeddings 不可用：
   - memory / preference 的本地生成仍继续
+  - RAG 文档仍会先落本地存储
   - VDB 建索引会跳过
   - 运行时检索直接返回空结果
 - 当 embeddings 恢复后，kernel 会自动补建缺失索引
+
+### RAG
+
+- 对外抽象：`RagBase` -> `RagDocument`
+- 当前支持的源类型：仅 markdown
+- 持久化：Drift / SQLite
+- 检索：LiteEmbeddings 召回 + 文档级聚合
+
+外部只需要提交完整 markdown 文档。分片、token 粗估、增量同步都在 kernel 内部处理。
 
 ### Cron
 
@@ -113,6 +126,24 @@ final service = await KernelService.create();
 - `preferences`
 
 如果 embeddings 不可用，它会返回空的派生结果，并带上 `embeddingsAvailable == false`。
+
+### RAG
+
+管理 markdown 知识库并执行语义检索：
+
+- `createRagBase({String? baseId, required String name, Map<String, dynamic>? metadata})`
+- `getRagBase(String baseId)`
+- `listRagBases({int offset = 0, int limit = 50})`
+- `updateRagBase({required String baseId, String? name, Map<String, dynamic>? metadata})`
+- `deleteRagBase(String baseId)`
+- `upsertRagMarkdownDocument({required String baseId, required String documentId, required String title, required String markdown, Map<String, dynamic>? metadata, bool sync = true})`
+- `getRagDocument({required String baseId, required String documentId})`
+- `listRagDocuments({required String baseId, int offset = 0, int limit = 50})`
+- `deleteRagDocument({required String baseId, required String documentId})`
+- `syncRagDocument({required String baseId, required String documentId})`
+- `queryRag({required String baseId, required String query, int limit = 5, int candidateLimit = 20})`
+
+`upsertRagMarkdownDocument(...)` 默认会保存完整文档，并自动重新分片和同步向量索引。
 
 ### 健康状态 / Readiness
 
@@ -195,6 +226,7 @@ Adaptive supervision 会监控：
 
 - memory
 - preference
+- rag
 - cron
 - model profiler
 
@@ -204,6 +236,7 @@ Adaptive supervision 会监控：
 
 - `.hive/kernel_memory.sqlite`
 - `.hive/kernel_preference.sqlite`
+- `.hive/kernel_rag.sqlite`
 - `.hive/kernel_model_profiles.sqlite`
 - `.hive/kernel_cron.sqlite`
 
@@ -263,5 +296,48 @@ Future<void> main() async {
   print('embeddingsAvailable=${context.embeddingsAvailable}');
   print('memorySummaries=${context.memorySummaries.length}');
   print('preferences=${context.preferences.length}');
+}
+```
+
+## 最小 RAG 示例
+
+```dart
+import 'package:agentos_kernel/agentos_kernel.dart';
+
+Future<void> main() async {
+  final service = await KernelService.create();
+
+  await service.updateEmbeddingsConfig(
+    const EmbeddingsConfig(
+      baseUrl: '<LITE_EMBEDDINGS_BASE_URL>',
+      docsName: '<LITE_EMBEDDINGS_DOCS_NAME>',
+      model: '<EMBEDDINGS_MODEL>',
+      llmModel: '<EMBEDDINGS_LLM_MODEL>',
+    ),
+  );
+
+  final base = await service.createRagBase(name: 'product_docs');
+
+  await service.upsertRagMarkdownDocument(
+    baseId: base.id,
+    documentId: 'intro',
+    title: 'Introduction',
+    markdown: '''
+# Introduction
+
+AgentOS Kernel supports memory, preference, cron, and RAG modules.
+
+## RAG
+
+RAG documents are written as markdown and segmented automatically.
+''',
+  );
+
+  final result = await service.queryRag(
+    baseId: base.id,
+    query: 'How are RAG documents ingested?',
+  );
+
+  print('hits=${result.hits.length}');
 }
 ```
