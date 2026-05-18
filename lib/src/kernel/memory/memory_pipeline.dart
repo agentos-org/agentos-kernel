@@ -62,7 +62,7 @@ class MemoryPipeline {
         bucketCounts: bucketCounts,
       );
     }
-    final summaries = await activeSummarizer.summarize();
+    final summaries = await activeSummarizer.summarize(fullScan: true);
     await syncIndexIfAvailable(summaries: summaries);
     return MemorySummarizationTriggerResult(
       summaries: summaries,

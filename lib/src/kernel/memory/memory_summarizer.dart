@@ -30,6 +30,8 @@ class MemorySummarizer {
   Timer? _timer;
   bool _running = false;
   bool _dirty = true;
+  int _bucketCursor = 0;
+  int _remainingDirtyBucketScans = MemorySummaryBucket.values.length;
 
   static const Duration _idleGapThreshold = Duration(hours: 1);
   static const Map<MemorySummaryBucket, int> _summaryCaps = {
@@ -48,7 +50,7 @@ class MemorySummarizer {
     required this.llmConfig,
     this.llmConfigResolver,
     this.logger,
-    this.interval = const Duration(minutes: 5),
+    this.interval = const Duration(minutes: 30),
     this.recentWindow = const Duration(hours: 24),
     this.maxRecords = 200,
     this.minRecords = 1,
@@ -82,21 +84,35 @@ class MemorySummarizer {
     }
   }
 
-  Future<List<MemorySummary>> summarize() async {
+  Future<List<MemorySummary>> summarize({bool fullScan = false}) async {
     final now = DateTime.now();
     final all = <MemorySummary>[];
-    for (final bucket in MemorySummaryBucket.values) {
+    final buckets = MemorySummaryBucket.values;
+    final scanLimit = fullScan || maxScopesPerRun <= 0
+        ? buckets.length
+        : (maxScopesPerRun < buckets.length ? maxScopesPerRun : buckets.length);
+    if (fullScan || _remainingDirtyBucketScans <= 0) {
+      _remainingDirtyBucketScans = buckets.length;
+    }
+    final scansThisRun = _remainingDirtyBucketScans < scanLimit
+        ? _remainingDirtyBucketScans
+        : scanLimit;
+    for (var i = 0; i < scansThisRun; i++) {
+      final bucket = buckets[_bucketCursor % buckets.length];
+      _bucketCursor = (_bucketCursor + 1) % buckets.length;
       final summaries = await _buildBucketSummaries(bucket, now: now);
       await memory.saveMemorySummaries(bucket, summaries);
       all.addAll(summaries);
     }
     all.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    _dirty = false;
+    _remainingDirtyBucketScans -= scansThisRun;
+    _dirty = !fullScan && _remainingDirtyBucketScans > 0;
     return all;
   }
 
   void markDirty() {
     _dirty = true;
+    _remainingDirtyBucketScans = MemorySummaryBucket.values.length;
   }
 
   Future<List<MemorySummary>> _buildBucketSummaries(
@@ -260,7 +276,9 @@ class MemorySummarizer {
       'Keep only information that may help understand future user requests.',
     );
     buffer.writeln('Do not keep trivial chatter or stale details.');
-    buffer.writeln('Return the summary only through write_memory_summary.');
+    buffer.writeln(
+      'Call the write_memory_summary function directly with exactly one text argument.',
+    );
     buffer.writeln('Segment #$ordinal');
     buffer.writeln(
       'Time range: ${segment.start.toUtc().toIso8601String()} -> ${segment.end.toUtc().toIso8601String()}',
@@ -306,7 +324,7 @@ class MemorySummarizer {
         final session = await sdk.initSession(capability: capability);
         final task = UserTask(
           content: [Content(type: ContentType.text, message: prompt)],
-          isChunk: true,
+          isChunk: false,
         );
         final completer = Completer<Map<String, dynamic>>();
         final handler = _SummaryToolHandler(
@@ -331,7 +349,7 @@ class MemorySummarizer {
 
   String _summarySystemPrompt(MemorySummaryBucket bucket) {
     return 'You condense memory into one concise ${bucket.name} summary. '
-        'Call write_memory_summary with a single text field only. '
+        'Call the write_memory_summary function directly with a single text field only. '
         'Keep only information that may help future request understanding.';
   }
 
@@ -346,12 +364,17 @@ class MemorySummarizer {
       'functions': [
         {
           'name': 'write_memory_summary',
-          'description': 'Write one concise memory summary.',
+          'description':
+              'Write one concise memory summary. Call this function directly; do not wrap it in another function.',
           'parameters': [
             {
               'name': 'text',
+              'description': 'The concise memory summary text.',
               'required': true,
-              'schema': {'type': 'string'},
+              'schema': {
+                'type': 'string',
+                'description': 'The concise memory summary text.',
+              },
             },
           ],
         },
@@ -392,13 +415,17 @@ class _SummaryToolHandler extends AgentMessageHandler {
     FunctionCall functionCall,
   ) async {
     onFirstToken();
-    if (functionCall.name == 'write_memory_summary') {
-      onPayload(Map<String, dynamic>.from(functionCall.arguments));
+    final call = _resolveToolCall(functionCall);
+    if (call.name == 'write_memory_summary') {
+      onPayload(call.arguments);
       return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
     }
     return ToolReturn(
       id: functionCall.id,
-      result: {'status': 'ignored', 'message': 'Unknown function.'},
+      result: {
+        'status': 'ignored',
+        'message': 'Unknown function: ${functionCall.name}',
+      },
     );
   }
 
@@ -425,6 +452,53 @@ class _SummaryToolHandler extends AgentMessageHandler {
   Future<void> onError(Exception e) async {
     onDoneCallback();
   }
+}
+
+_ResolvedToolCall _resolveToolCall(FunctionCall functionCall) {
+  final originalName = functionCall.name.trim();
+  final args = Map<String, dynamic>.from(functionCall.arguments);
+  final normalized = originalName.toLowerCase();
+  if (normalized == 'fn' ||
+      normalized == 'function' ||
+      normalized == 'function_call' ||
+      normalized == 'tool_call') {
+    final nestedName = args['name'] ?? args['function'] ?? args['tool'];
+    final nestedArgs = args['arguments'] ?? args['args'] ?? args['input'];
+    if (nestedName is String && nestedName.trim().isNotEmpty) {
+      return _ResolvedToolCall(
+        name: nestedName.trim(),
+        arguments: _argumentsMap(nestedArgs, fallback: args),
+      );
+    }
+  }
+  return _ResolvedToolCall(name: originalName, arguments: args);
+}
+
+Map<String, dynamic> _argumentsMap(Object? value, {required Map fallback}) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+  if (value is Map) {
+    return Map<String, dynamic>.from(value);
+  }
+  if (value is String && value.trim().isNotEmpty) {
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {
+      return Map<String, dynamic>.from(fallback);
+    }
+  }
+  return Map<String, dynamic>.from(fallback);
+}
+
+class _ResolvedToolCall {
+  final String name;
+  final Map<String, dynamic> arguments;
+
+  const _ResolvedToolCall({required this.name, required this.arguments});
 }
 
 class _MemorySource {

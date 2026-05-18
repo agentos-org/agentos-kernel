@@ -82,6 +82,11 @@ class KernelRuntimeConfig {
   final bool memorySummaryEnabled;
   final Duration memorySummaryInterval;
   final int memorySummaryMaxScopesPerRun;
+  final bool preferenceExtractionEnabled;
+  final Duration preferenceExtractionInterval;
+  final int preferenceExtractionMaxPerRun;
+  final int preferenceExtractionMinRecords;
+  final int preferenceExtractionQueueLimit;
   final String opentoolDaemonHost;
   final int opentoolDaemonPort;
   final KernelMode mode;
@@ -100,8 +105,13 @@ class KernelRuntimeConfig {
     this.memorySummaryMaxRecords = 200,
     this.memorySummaryMinRecords = 20,
     this.memorySummaryEnabled = true,
-    this.memorySummaryInterval = const Duration(minutes: 5),
+    this.memorySummaryInterval = const Duration(minutes: 30),
     this.memorySummaryMaxScopesPerRun = 1,
+    this.preferenceExtractionEnabled = true,
+    this.preferenceExtractionInterval = const Duration(minutes: 10),
+    this.preferenceExtractionMaxPerRun = 1,
+    this.preferenceExtractionMinRecords = 3,
+    this.preferenceExtractionQueueLimit = 200,
     this.opentoolDaemonHost = '127.0.0.1',
     this.opentoolDaemonPort = DAEMON_DEFAULT_PORT,
     this.mode = KernelMode.balanced,
@@ -563,11 +573,17 @@ class KernelService {
       memorySummarizerStarted = true;
       memoryPipeline.summarizer = memorySummarizer;
     }
-    if (llmConfig != null && llmConfigPool != null) {
+    if (llmConfig != null &&
+        llmConfigPool != null &&
+        config.runtime.preferenceExtractionEnabled) {
       preferenceProcessor = PreferenceProcessor(
         extractor: preferenceExtractorSwitch,
         llmQueue: llmQueue,
         logger: logger,
+        interval: config.runtime.preferenceExtractionInterval,
+        maxPerRun: config.runtime.preferenceExtractionMaxPerRun,
+        queueLimit: config.runtime.preferenceExtractionQueueLimit,
+        minRecords: config.runtime.preferenceExtractionMinRecords,
       );
     }
     final service = KernelService._internal(
@@ -1216,11 +1232,17 @@ class KernelService {
       _memorySummarizerStarted = true;
       _kernel.memoryPipeline.summarizer = _memorySummarizer;
     }
-    _preferenceProcessor ??= PreferenceProcessor(
-      extractor: preferenceExtractorSwitch,
-      llmQueue: llmQueue,
-      logger: _logger,
-    );
+    if (_runtimeConfig.preferenceExtractionEnabled) {
+      _preferenceProcessor ??= PreferenceProcessor(
+        extractor: preferenceExtractorSwitch,
+        llmQueue: llmQueue,
+        logger: _logger,
+        interval: _runtimeConfig.preferenceExtractionInterval,
+        maxPerRun: _runtimeConfig.preferenceExtractionMaxPerRun,
+        queueLimit: _runtimeConfig.preferenceExtractionQueueLimit,
+        minRecords: _runtimeConfig.preferenceExtractionMinRecords,
+      );
+    }
   }
 
   Future<bool> updateEmbeddingsConfig(EmbeddingsConfig config) async {

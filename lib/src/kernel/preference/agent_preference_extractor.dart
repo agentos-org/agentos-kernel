@@ -61,7 +61,7 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
             callbackOpenTool: CallbackOpenTool(opentool: _toolSpecJson()),
           );
           final session = await sdk.initSession(capability: capability);
-          final task = UserTask(content: taskContent, isChunk: true);
+          final task = UserTask(content: taskContent, isChunk: false);
           final completer = Completer<List<String>>();
           final handler = _PreferenceExtractionToolHandler(
             onFirstToken: context.markFirstToken,
@@ -112,7 +112,9 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
           }();
     final intro = StringBuffer();
     intro.writeln('You extract stable user preferences.');
-    intro.writeln('Call generate_preference with a text array.');
+    intro.writeln(
+      'Call the generate_preference function with exactly one argument: text, an array of strings.',
+    );
     intro.writeln('If no stable preference exists, return an empty array.');
     intro.writeln('Event type: ${record.type}');
     final taskContent = <Content>[
@@ -148,14 +150,17 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
       'functions': [
         {
           'name': 'generate_preference',
-          'description': 'Generate durable preference texts for the user.',
+          'description':
+              'Generate durable preference texts for the user. Call this function directly; do not wrap it in another function.',
           'parameters': [
             {
               'name': 'text',
-              'description': 'Preference texts to store.',
+              'description':
+                  'Stable preference texts to store. Use an empty array when there are no durable preferences.',
               'required': true,
               'schema': {
                 'type': 'array',
+                'description': 'Array of stable user preference strings.',
                 'items': {'type': 'string'},
               },
             },
@@ -198,15 +203,18 @@ class _PreferenceExtractionToolHandler extends AgentMessageHandler {
     FunctionCall functionCall,
   ) async {
     onFirstToken();
-    final args = Map<String, dynamic>.from(functionCall.arguments);
-    switch (functionCall.name) {
+    final call = _resolveToolCall(functionCall);
+    switch (call.name) {
       case 'generate_preference':
-        onPreferences(_buildPreferences(args));
+        onPreferences(_buildPreferences(call.arguments));
         return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
       default:
         return ToolReturn(
           id: functionCall.id,
-          result: {'status': 'ignored', 'message': 'Unknown function.'},
+          result: {
+            'status': 'ignored',
+            'message': 'Unknown function: ${functionCall.name}',
+          },
         );
     }
   }
@@ -246,4 +254,51 @@ class _PreferenceExtractionToolHandler extends AgentMessageHandler {
         .where((item) => item.isNotEmpty)
         .toList(growable: false);
   }
+}
+
+_ResolvedToolCall _resolveToolCall(FunctionCall functionCall) {
+  final originalName = functionCall.name.trim();
+  final args = Map<String, dynamic>.from(functionCall.arguments);
+  final normalized = originalName.toLowerCase();
+  if (normalized == 'fn' ||
+      normalized == 'function' ||
+      normalized == 'function_call' ||
+      normalized == 'tool_call') {
+    final nestedName = args['name'] ?? args['function'] ?? args['tool'];
+    final nestedArgs = args['arguments'] ?? args['args'] ?? args['input'];
+    if (nestedName is String && nestedName.trim().isNotEmpty) {
+      return _ResolvedToolCall(
+        name: nestedName.trim(),
+        arguments: _argumentsMap(nestedArgs, fallback: args),
+      );
+    }
+  }
+  return _ResolvedToolCall(name: originalName, arguments: args);
+}
+
+Map<String, dynamic> _argumentsMap(Object? value, {required Map fallback}) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+  if (value is Map) {
+    return Map<String, dynamic>.from(value);
+  }
+  if (value is String && value.trim().isNotEmpty) {
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {
+      return Map<String, dynamic>.from(fallback);
+    }
+  }
+  return Map<String, dynamic>.from(fallback);
+}
+
+class _ResolvedToolCall {
+  final String name;
+  final Map<String, dynamic> arguments;
+
+  const _ResolvedToolCall({required this.name, required this.arguments});
 }
