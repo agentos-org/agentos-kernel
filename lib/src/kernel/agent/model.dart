@@ -103,6 +103,13 @@ class KernelLlmModel {
   final int? contextWindowSize;
   final LlmModelSource source;
 
+  /// Canonical upstream provider name supplied by agentos-api
+  /// (`openai/deepseek/glm/kimi/mimo/minimax/qwen`).
+  ///
+  /// When building a liteagent [LLMConfig] this value becomes the liteagent `adapter`
+  /// Defaults to `openai`.
+  final String provider;
+
   const KernelLlmModel({
     required this.baseUrl,
     required this.model,
@@ -115,6 +122,7 @@ class KernelLlmModel {
     required this.sizeGB,
     this.contextWindowSize,
     this.source = LlmModelSource.local,
+    this.provider = 'openai',
   });
 
   String modelKey({String? apiKeyOverride}) {

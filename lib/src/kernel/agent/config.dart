@@ -5,16 +5,47 @@ import 'model.dart';
 
 typedef LlmConfigResolver = LLMConfig Function();
 
+/// liteagent 服务端约定的统一 provider。内核侧发送任何大模型请求都使用它，
+/// 真实上游厂商通过 [LLMConfig.adapter] 区分。
+const String kLiteAgentProvider = 'lite_oneapi';
+
+const String _kDefaultAdapter = 'openai';
+
+/// 归一化内核下发给 liteagent 的 [LLMConfig]：
+/// - 强制 `provider = lite_oneapi`（不再使用 `provider=openai`）；
+/// - `adapter` 保留模型自带的上游厂商标识，缺省回落到 `openai`；
+/// - 顺带 trim 掉 apiKey 的首尾空白。
 LLMConfig normalizeLlmConfigForLiteAgent(LLMConfig config) {
   final apiKey = config.apiKey?.trim();
-  if (apiKey == config.apiKey) {
-    return config;
-  }
+  final adapter = (config.adapter == null || config.adapter!.trim().isEmpty)
+      ? _kDefaultAdapter
+      : config.adapter!.trim();
   return LLMConfig(
+    provider: kLiteAgentProvider,
     baseUrl: config.baseUrl,
     apiKey: (apiKey == null || apiKey.isEmpty) ? null : apiKey,
     model: config.model,
+    adapter: adapter,
+    headers: config.headers,
+    temperature: config.temperature,
+    maxTokens: config.maxTokens,
     contextWindowSize: config.contextWindowSize,
+    topP: config.topP,
+    supportsToolCall: config.supportsToolCall,
+    supportsReasoning: config.supportsReasoning,
+  );
+}
+
+/// 由 [KernelLlmModel] 构造 liteagent [LLMConfig]，统一写入
+/// `provider=lite_oneapi` 且 `adapter=model.provider`。
+LLMConfig _buildLiteAgentConfig(KernelLlmModel model) {
+  return LLMConfig(
+    provider: kLiteAgentProvider,
+    baseUrl: model.baseUrl,
+    apiKey: model.apiKey ?? '',
+    model: model.model,
+    adapter: model.provider,
+    contextWindowSize: model.contextWindowSize,
   );
 }
 
@@ -27,10 +58,18 @@ class LlmConfigHolder {
 
   void updateModel(String model) {
     _value = LLMConfig(
+      provider: _value.provider,
       baseUrl: _value.baseUrl,
       apiKey: _value.apiKey,
       model: model,
+      adapter: _value.adapter,
+      headers: _value.headers,
+      temperature: _value.temperature,
+      maxTokens: _value.maxTokens,
       contextWindowSize: _value.contextWindowSize,
+      topP: _value.topP,
+      supportsToolCall: _value.supportsToolCall,
+      supportsReasoning: _value.supportsReasoning,
     );
   }
 }
@@ -60,12 +99,7 @@ class LlmConfigPool {
     : _entries = models
           .map(
             (m) => _PoolEntry(
-              config: LLMConfig(
-                baseUrl: m.baseUrl,
-                apiKey: m.apiKey ?? '',
-                model: m.model,
-                contextWindowSize: m.contextWindowSize,
-              ),
+              config: _buildLiteAgentConfig(m),
               source: m.source,
             ),
           )
@@ -87,12 +121,7 @@ class LlmConfigPool {
     _entries = models
         .map(
           (m) => _PoolEntry(
-            config: LLMConfig(
-              baseUrl: m.baseUrl,
-              apiKey: m.apiKey ?? '',
-              model: m.model,
-              contextWindowSize: m.contextWindowSize,
-            ),
+            config: _buildLiteAgentConfig(m),
             source: m.source,
           ),
         )
