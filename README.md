@@ -97,6 +97,7 @@ Update external services after startup:
 - `updateOpenToolDaemon({required String host, required int port})`
 - `startOpenToolDaemonPresetSync({required String daemonApiKey, Duration debounce, DaemonPresetFilter? presetFilter})`
 - `stopOpenToolDaemonPresetSync()`
+- `getOpenToolDaemonPresetSyncSnapshot()`
 - `setPresetOpenSpecList(List<PresetOpenSpec> presetOpenSpecList)`
 - `setMode(KernelMode mode)` / `getMode()`
 
@@ -134,10 +135,13 @@ Manage markdown knowledge bases and query them semantically:
 - `updateRagBase({required String baseId, String? name, Map<String, dynamic>? metadata})`
 - `deleteRagBase(String baseId)`
 - `upsertRagMarkdownDocument({required String baseId, required String documentId, required String title, required String markdown, Map<String, dynamic>? metadata, bool sync = true})`
+- `upsertRagMarkdownDocuments({required String baseId, required List<RagMarkdownDocumentInputDto> documents, bool sync = true})`
 - `getRagDocument({required String baseId, required String documentId})`
 - `listRagDocuments({required String baseId, int offset = 0, int limit = 50})`
 - `deleteRagDocument({required String baseId, required String documentId})`
 - `syncRagDocument({required String baseId, required String documentId})`
+- `syncRagBase(String baseId)`
+- `retryFailedRagDocuments({String? baseId})`
 - `queryRag({required String baseId, required String query, int limit = 5, int candidateLimit = 20})`
 
 `upsertRagMarkdownDocument(...)` stores the full document and automatically re-segments and syncs the vector index by default.
@@ -172,7 +176,7 @@ Manage markdown knowledge bases and query them semantically:
 
 ## Admin API
 
-Use `KernelAdminService` for raw data inspection and deletion:
+Use `KernelAdminService` for storage inspection, maintenance, and RAG sync/debug helpers:
 
 - `listMemoryItems(...)`
 - `deleteMemoryItem(...)`
@@ -183,8 +187,13 @@ Use `KernelAdminService` for raw data inspection and deletion:
 - `triggerPreferenceExtraction()` returns `PreferenceExtractionTriggerResult`
 - `deletePreference(...)`
 - `clearPreferences({String userId = 'default'})`
+- `listRagDocuments({String? baseId, RagDocumentSyncStatus? syncStatus, int offset = 0, int limit = 50})`
+- `listFailedRagDocuments({String? baseId, int offset = 0, int limit = 50})`
+- `syncRagBase(String baseId)` returns `RagBatchResultDto`
+- `retryFailedRagDocuments({String? baseId})` returns `RagBatchResultDto`
+- `listRagSegments({required String baseId, required String documentId})`
 
-`KernelService` is for runtime behavior. `KernelAdminService` is for storage inspection and maintenance.
+`KernelService` is for runtime behavior. `KernelAdminService` is for storage inspection, maintenance, and troubleshooting RAG sync state.
 
 ## Background Trigger Strategy
 

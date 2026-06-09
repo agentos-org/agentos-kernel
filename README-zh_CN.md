@@ -97,6 +97,7 @@ final service = await KernelService.create();
 - `updateOpenToolDaemon({required String host, required int port})`
 - `startOpenToolDaemonPresetSync({required String daemonApiKey, Duration debounce, DaemonPresetFilter? presetFilter})`
 - `stopOpenToolDaemonPresetSync()`
+- `getOpenToolDaemonPresetSyncSnapshot()`
 - `setPresetOpenSpecList(List<PresetOpenSpec> presetOpenSpecList)`
 - `setMode(KernelMode mode)` / `getMode()`
 
@@ -137,10 +138,13 @@ final service = await KernelService.create();
 - `updateRagBase({required String baseId, String? name, Map<String, dynamic>? metadata})`
 - `deleteRagBase(String baseId)`
 - `upsertRagMarkdownDocument({required String baseId, required String documentId, required String title, required String markdown, Map<String, dynamic>? metadata, bool sync = true})`
+- `upsertRagMarkdownDocuments({required String baseId, required List<RagMarkdownDocumentInputDto> documents, bool sync = true})`
 - `getRagDocument({required String baseId, required String documentId})`
 - `listRagDocuments({required String baseId, int offset = 0, int limit = 50})`
 - `deleteRagDocument({required String baseId, required String documentId})`
 - `syncRagDocument({required String baseId, required String documentId})`
+- `syncRagBase(String baseId)`
+- `retryFailedRagDocuments({String? baseId})`
 - `queryRag({required String baseId, required String query, int limit = 5, int candidateLimit = 20})`
 
 `upsertRagMarkdownDocument(...)` 默认会保存完整文档，并自动重新分片和同步向量索引。
@@ -175,7 +179,7 @@ final service = await KernelService.create();
 
 ## Admin API
 
-使用 `KernelAdminService` 读取和删除原始存储数据：
+使用 `KernelAdminService` 做存储查看、维护，以及 RAG 同步调试辅助：
 
 - `listMemoryItems(...)`
 - `deleteMemoryItem(...)`
@@ -186,8 +190,13 @@ final service = await KernelService.create();
 - `triggerPreferenceExtraction()` 返回 `PreferenceExtractionTriggerResult`
 - `deletePreference(...)`
 - `clearPreferences({String userId = 'default'})`
+- `listRagDocuments({String? baseId, RagDocumentSyncStatus? syncStatus, int offset = 0, int limit = 50})`
+- `listFailedRagDocuments({String? baseId, int offset = 0, int limit = 50})`
+- `syncRagBase(String baseId)` 返回 `RagBatchResultDto`
+- `retryFailedRagDocuments({String? baseId})` 返回 `RagBatchResultDto`
+- `listRagSegments({required String baseId, required String documentId})`
 
-`KernelService` 面向运行时行为。`KernelAdminService` 面向存储查看与维护。
+`KernelService` 面向运行时行为。`KernelAdminService` 面向存储查看、维护，以及 RAG 同步状态排障。
 
 ## 后台触发策略
 
