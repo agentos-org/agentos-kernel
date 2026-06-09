@@ -7,7 +7,7 @@ void main() {
     test('appends current time to trailing text content', () {
       final spec = AgentCronSpec(
         systemPrompt: 'You are a cron agent.',
-        content: [Content(type: ContentType.text, message: '网络搜索关于AI的新闻')],
+        content: [Content(type: ContentType.text, message: 'Search the web for AI news')],
       );
 
       final task = spec.toUserTask(now: DateTime(2021, 2, 4, 12, 33, 22));
@@ -15,7 +15,7 @@ void main() {
       expect(task.content, hasLength(1));
       expect(
         task.content.single.message,
-        '网络搜索关于AI的新闻\n*Current Time: 2021-02-04 12:33:22*',
+        'Search the web for AI news\n*Current Time: 2021-02-04 12:33:22*',
       );
     });
 

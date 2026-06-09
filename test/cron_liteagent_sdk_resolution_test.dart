@@ -235,7 +235,7 @@ void main() {
               role: AgentRoleType.LLM,
               to: AgentRoleType.USER,
               type: AgentMessageType.TEXT,
-              content: '任务执行总结报告',
+              content: 'Task execution summary report',
               createTime: DateTime(2026, 1, 1, 9, 1, 0),
             ),
             AgentMessage(
@@ -281,8 +281,8 @@ void main() {
         final result = await executor.run(task);
 
         expect(result.success, isTrue);
-        expect(result.displayText, '任务执行总结报告');
-        expect(result.result?['content'], '任务执行总结报告');
+        expect(result.displayText, 'Task execution summary report');
+        expect(result.result?['content'], 'Task execution summary report');
       },
     );
 
@@ -310,7 +310,7 @@ void main() {
                 role: AgentRoleType.AGENT,
                 to: AgentRoleType.USER,
                 type: AgentMessageType.TEXT,
-                content: '最终总结文本',
+                content: 'Final summary text',
                 createTime: DateTime(2026, 1, 1, 9, 0, 1),
               ),
               AgentMessage(
@@ -357,8 +357,8 @@ void main() {
         final result = await executor.run(task);
 
         expect(result.success, isTrue);
-        expect(result.displayText, '最终总结文本');
-        expect(result.result?['content'], '最终总结文本');
+        expect(result.displayText, 'Final summary text');
+        expect(result.result?['content'], 'Final summary text');
         expect(sdk.getHistoryCalls, greaterThanOrEqualTo(2));
       },
     );

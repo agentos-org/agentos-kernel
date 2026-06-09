@@ -115,7 +115,7 @@ WHERE type IN ('table', 'index');
         taskId: 'task-1',
         actorId: 'alice',
         actorType: AgentMemoryActorType.user,
-        content: const ['你好', '帮我查日程'],
+        content: const ['Hello', 'Help me check my schedule'],
         timestamp: base,
       );
       await memory.appendAgentMemoryMessage(
@@ -123,7 +123,7 @@ WHERE type IN ('table', 'index');
         taskId: 'task-2',
         actorId: 'calendar.app',
         actorType: AgentMemoryActorType.app,
-        content: const ['今天下午 3 点有会议'],
+        content: const ['There is a meeting at 3 PM this afternoon'],
         timestamp: base.add(const Duration(seconds: 1)),
       );
 
@@ -137,7 +137,10 @@ WHERE type IN ('table', 'index');
         contains('alice(user) 2026-01-01T08:00:00.000Z [task-1]:'),
       );
       expect(derived.content, contains('calendar.app(app)'));
-      expect(derived.content, contains('今天下午 3 点有会议'));
+      expect(
+        derived.content,
+        contains('There is a meeting at 3 PM this afternoon'),
+      );
     });
 
     test('lists memory items with pagination and deletes by id', () async {

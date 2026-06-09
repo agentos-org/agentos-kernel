@@ -5,16 +5,17 @@ import 'model.dart';
 
 typedef LlmConfigResolver = LLMConfig Function();
 
-/// liteagent 服务端约定的统一 provider。内核侧发送任何大模型请求都使用它，
-/// 真实上游厂商通过 [LLMConfig.adapter] 区分。
+/// Canonical provider name expected by the liteagent server.
+/// The kernel sends all LLM requests through this provider, while the
+/// actual upstream vendor is identified via [LLMConfig.adapter].
 const String kLiteAgentProvider = 'lite_oneapi';
 
 const String _kDefaultAdapter = 'openai';
 
-/// 归一化内核下发给 liteagent 的 [LLMConfig]：
-/// - 强制 `provider = lite_oneapi`（不再使用 `provider=openai`）；
-/// - `adapter` 保留模型自带的上游厂商标识，缺省回落到 `openai`；
-/// - 顺带 trim 掉 apiKey 的首尾空白。
+/// Normalizes the kernel-generated [LLMConfig] before sending it to liteagent:
+/// - forces `provider = lite_oneapi` instead of `provider=openai`;
+/// - preserves the model's upstream vendor in `adapter`, defaulting to `openai`;
+/// - trims surrounding whitespace from `apiKey`.
 LLMConfig normalizeLlmConfigForLiteAgent(LLMConfig config) {
   final apiKey = config.apiKey?.trim();
   final adapter = (config.adapter == null || config.adapter!.trim().isEmpty)
@@ -36,8 +37,8 @@ LLMConfig normalizeLlmConfigForLiteAgent(LLMConfig config) {
   );
 }
 
-/// 由 [KernelLlmModel] 构造 liteagent [LLMConfig]，统一写入
-/// `provider=lite_oneapi` 且 `adapter=model.provider`。
+/// Builds the liteagent [LLMConfig] from a [KernelLlmModel], always using
+/// `provider=lite_oneapi` and `adapter=model.provider`.
 LLMConfig _buildLiteAgentConfig(KernelLlmModel model) {
   return LLMConfig(
     provider: kLiteAgentProvider,
