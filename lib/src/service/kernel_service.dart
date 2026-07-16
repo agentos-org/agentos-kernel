@@ -1118,6 +1118,10 @@ class KernelService {
       daemonApiKey: _openToolDaemonSyncApiKey!,
       debounce: _openToolDaemonSyncDebounce,
       presetFilter: _openToolDaemonPresetFilter,
+      // Temporarily keep daemon tools out of LiteAgent's global presets.
+      // The daemon catalog remains available to the registry and to
+      // session-scoped callbackOpenTool users such as cron execution.
+      publishLiteAgentPresets: false,
       setPresetOpenSpecList: setPresetOpenSpecList,
       openToolDaemonRegistryProvider: _resolveOpenToolDaemonRegistry,
       logger: _logger,
@@ -2135,6 +2139,7 @@ class _OpenToolDaemonPresetSync {
   final String daemonApiKey;
   final Duration debounce;
   final DaemonPresetFilter? presetFilter;
+  final bool publishLiteAgentPresets;
   final Future<void> Function(List<PresetOpenSpec>) setPresetOpenSpecList;
   final OpenToolDaemonRegistry Function() openToolDaemonRegistryProvider;
   final KernelLogger? logger;
@@ -2153,6 +2158,7 @@ class _OpenToolDaemonPresetSync {
     required this.daemonApiKey,
     required this.debounce,
     required this.presetFilter,
+    required this.publishLiteAgentPresets,
     required this.setPresetOpenSpecList,
     required this.openToolDaemonRegistryProvider,
     this.logger,
@@ -2211,10 +2217,12 @@ class _OpenToolDaemonPresetSync {
     await _subscription?.cancel();
     _subscription = null;
     _clearDirectoryTools();
-    try {
-      await setPresetOpenSpecList(const []);
-    } catch (_) {
-      // Ignore cleanup failures while shutting down the sync bridge.
+    if (publishLiteAgentPresets) {
+      try {
+        await setPresetOpenSpecList(const []);
+      } catch (_) {
+        // Ignore cleanup failures while shutting down the sync bridge.
+      }
     }
   }
 
@@ -2335,10 +2343,6 @@ class _OpenToolDaemonPresetSync {
     _revision += 1;
     final activeTools = _activeTools.values.toList()
       ..sort((a, b) => a.toolId.compareTo(b.toolId));
-    final presetList = activeTools
-        .where((tool) => presetFilter?.call(tool.toPresetCandidate()) ?? true)
-        .map((tool) => tool.preset)
-        .toList();
     final registry = openToolDaemonRegistryProvider();
     final nextDirectoryToolIds = <String>{};
     for (final tool in activeTools) {
@@ -2357,7 +2361,17 @@ class _OpenToolDaemonPresetSync {
     _directoryToolIds
       ..clear()
       ..addAll(nextDirectoryToolIds);
-    await setPresetOpenSpecList(presetList);
+    // Temporarily disabled: publishing every daemon tool as a global LiteAgent
+    // preset makes every LiteAgent session carry an unnecessarily large tool
+    // surface. Keep the original publishing path behind a switch so it can be
+    // restored after task-scoped tool selection is available.
+    if (publishLiteAgentPresets) {
+      final presetList = activeTools
+          .where((tool) => presetFilter?.call(tool.toPresetCandidate()) ?? true)
+          .map((tool) => tool.preset)
+          .toList();
+      await setPresetOpenSpecList(presetList);
+    }
   }
 
   void _clearDirectoryTools() {
