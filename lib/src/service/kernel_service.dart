@@ -54,7 +54,13 @@ class LlmConfigGroup {
 class EmbeddingsConfig {
   final String baseUrl;
   final String? embeddingModelBaseUrl;
+
+  /// Embeddings/vector store service authentication key.
   final String? apiKey;
+
+  /// Embedding model inference service authentication key.
+  final String? embeddingModelApiKey;
+
   final String docsName;
   final String? model;
 
@@ -62,6 +68,7 @@ class EmbeddingsConfig {
     required this.baseUrl,
     this.embeddingModelBaseUrl,
     this.apiKey,
+    this.embeddingModelApiKey,
     required this.docsName,
     this.model,
   });
@@ -2075,7 +2082,7 @@ embeddings.LLMConfig? _buildEmbeddingsLlmConfig(EmbeddingsConfig config) {
     baseUrl: embeddingModelBaseUrl != null && embeddingModelBaseUrl.isNotEmpty
         ? embeddingModelBaseUrl
         : config.baseUrl,
-    apiKey: config.apiKey ?? '',
+    apiKey: config.embeddingModelApiKey ?? config.apiKey ?? '',
     model: model,
   );
 }

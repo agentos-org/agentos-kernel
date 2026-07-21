@@ -1,3 +1,8 @@
+## 0.1.1
+
+- Separate vector store and embedding model API keys while preserving backward
+  compatibility for existing embeddings configurations.
+
 ## 0.1.0
 
 - Initial public release.
