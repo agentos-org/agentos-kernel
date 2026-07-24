@@ -19,6 +19,7 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
   final LLMConfig llmConfig;
   final LlmConfigResolver? llmConfigResolver;
   final String systemPrompt;
+  final Duration taskTimeout;
   final List<String>? skills;
 
   AgentPreferenceExtractor({
@@ -27,6 +28,7 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
     required this.preference,
     required this.llmConfig,
     required this.systemPrompt,
+    this.taskTimeout = const Duration(minutes: 2),
     this.llmConfigResolver,
     this.skills,
   });
@@ -54,11 +56,20 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
         jobId: record.jobId,
         run: (context) async {
           final sdk = client.sdk;
+          final taskTimeoutSeconds = taskTimeout.inSeconds > 0
+              ? taskTimeout.inSeconds
+              : 1;
           final capability = Capability(
             llmConfig: effectiveConfig,
             systemPrompt: systemPrompt,
             skills: skills,
             callbackOpenTool: CallbackOpenTool(opentool: _toolSpecJson()),
+            timeoutSeconds: taskTimeoutSeconds,
+            maxLlmRequests: 2,
+            maxToolRounds: 1,
+            maxToolCalls: 1,
+            maxConsecutiveIdenticalToolRounds: 1,
+            maxTaskDurationSeconds: taskTimeoutSeconds,
           );
           final session = await sdk.initSession(capability: capability);
           final task = UserTask(content: taskContent, isChunk: false);
@@ -207,7 +218,13 @@ class _PreferenceExtractionToolHandler extends AgentMessageHandler {
     switch (call.name) {
       case 'generate_preference':
         onPreferences(_buildPreferences(call.arguments));
-        return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
+        return ToolReturn(
+          id: functionCall.id,
+          result: {
+            'status': 'completed',
+            'message': 'Preference extraction completed. Do not call again.',
+          },
+        );
       default:
         return ToolReturn(
           id: functionCall.id,

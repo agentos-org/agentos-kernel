@@ -7,7 +7,12 @@ void main() {
     test('appends current time to trailing text content', () {
       final spec = AgentCronSpec(
         systemPrompt: 'You are a cron agent.',
-        content: [Content(type: ContentType.text, message: 'Search the web for AI news')],
+        content: [
+          Content(
+            type: ContentType.text,
+            message: 'Search the web for AI news',
+          ),
+        ],
       );
 
       final task = spec.toUserTask(now: DateTime(2021, 2, 4, 12, 33, 22));
@@ -69,6 +74,7 @@ description: Break work into clear ordered steps before execution.
       );
 
       expect(capability.skills, const [plannerSkill]);
+      expect(capability.maxTaskDurationSeconds, spec.timeoutSeconds);
     });
   });
 }

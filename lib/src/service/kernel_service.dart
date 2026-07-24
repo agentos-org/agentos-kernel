@@ -88,9 +88,11 @@ class KernelRuntimeConfig {
   final int memorySummaryMinRecords;
   final bool memorySummaryEnabled;
   final Duration memorySummaryInterval;
+  final Duration memorySummaryTaskTimeout;
   final int memorySummaryMaxScopesPerRun;
   final bool preferenceExtractionEnabled;
   final Duration preferenceExtractionInterval;
+  final Duration preferenceExtractionTaskTimeout;
   final int preferenceExtractionMaxPerRun;
   final int preferenceExtractionMinRecords;
   final int preferenceExtractionQueueLimit;
@@ -113,9 +115,11 @@ class KernelRuntimeConfig {
     this.memorySummaryMinRecords = 20,
     this.memorySummaryEnabled = true,
     this.memorySummaryInterval = const Duration(minutes: 30),
+    this.memorySummaryTaskTimeout = const Duration(minutes: 2),
     this.memorySummaryMaxScopesPerRun = 1,
     this.preferenceExtractionEnabled = true,
     this.preferenceExtractionInterval = const Duration(minutes: 10),
+    this.preferenceExtractionTaskTimeout = const Duration(minutes: 2),
     this.preferenceExtractionMaxPerRun = 1,
     this.preferenceExtractionMinRecords = 3,
     this.preferenceExtractionQueueLimit = 200,
@@ -571,6 +575,7 @@ class KernelService {
         ),
         logger: logger,
         interval: config.runtime.memorySummaryInterval,
+        taskTimeout: config.runtime.memorySummaryTaskTimeout,
         recentWindow: config.runtime.memorySummaryRecentWindow,
         maxRecords: config.runtime.memorySummaryMaxRecords,
         minRecords: config.runtime.memorySummaryMinRecords,
@@ -1234,6 +1239,7 @@ class KernelService {
         ),
         logger: _logger,
         interval: _runtimeConfig.memorySummaryInterval,
+        taskTimeout: _runtimeConfig.memorySummaryTaskTimeout,
         recentWindow: _runtimeConfig.memorySummaryRecentWindow,
         maxRecords: _runtimeConfig.memorySummaryMaxRecords,
         minRecords: _runtimeConfig.memorySummaryMinRecords,
@@ -1742,6 +1748,7 @@ class KernelService {
       ),
       systemPrompt:
           'You extract stable user preferences. Use generate_preference with a text array, or return an empty array.',
+      taskTimeout: runtimeConfig.preferenceExtractionTaskTimeout,
       skills: preferenceSkills,
     );
     return _PreferenceExtractorDelegate(

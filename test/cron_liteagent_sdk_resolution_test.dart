@@ -60,6 +60,7 @@ void main() {
       expect(first.result?['content'], 'old-response');
       expect(oldSdk.initSessionCalls, 1);
       expect(oldSdk.chatCalls, 1);
+      expect(oldSdk.lastCapability!.maxTaskDurationSeconds, 3600);
 
       expect(second.success, isTrue);
       expect(second.liteAgentSessionId, 'new-session');
@@ -480,6 +481,40 @@ void main() {
         expect(sdk.lastCapability!.callbackOpenTool, isNotNull);
       },
     );
+
+    test(
+      'executor converts terminal chat errors into failed results',
+      () async {
+        final sdk = _FailingChatLiteAgentSdk();
+        final executor = AgentCronExecutor(
+          sdk: sdk,
+          llmConfigResolver: () =>
+              LLMConfig(baseUrl: 'http://127.0.0.1:9000', model: 'qwen-test'),
+        );
+        final task = CronTaskDefinition(
+          cronId: 'cron-failed-chat',
+          name: 'failed-chat',
+          schedule: '*/5 * * * *',
+          source: 'api',
+          concurrency: CronTaskConcurrencyPolicy.skipIfRunning,
+          spec: AgentCronSpec(
+            systemPrompt: 'You are a cron agent.',
+            content: [
+              Content(type: ContentType.text, message: 'Run the task.'),
+            ],
+          ),
+          createdAt: DateTime(2026, 1, 1),
+          updatedAt: DateTime(2026, 1, 1),
+          status: CronTaskStatus.active,
+        );
+
+        final result = await executor.run(task);
+
+        expect(result.success, isFalse);
+        expect(result.liteAgentSessionId, 'failed-chat-session');
+        expect(result.error, contains('tool_loop_limit_exceeded'));
+      },
+    );
   });
 }
 
@@ -508,27 +543,27 @@ class _RecordingLiteAgentSdk extends LiteAgentSDK {
     AgentMessageHandler agentMessageHandler,
   ) async {
     chatCalls += 1;
-    unawaited(
-      Future<void>(() async {
-        await agentMessageHandler.onMessage(
-          session.sessionId,
-          AgentMessage(
-            sessionId: session.sessionId,
-            taskId: 'task-1',
-            role: AgentRoleType.LLM,
-            to: AgentRoleType.USER,
-            type: AgentMessageType.TEXT,
-            content: responseText,
-            createTime: DateTime(2026, 1, 1),
-          ),
-        );
-        await agentMessageHandler.onDone();
-      }),
+    await agentMessageHandler.onMessage(
+      session.sessionId,
+      AgentMessage(
+        sessionId: session.sessionId,
+        taskId: 'task-1',
+        role: AgentRoleType.LLM,
+        to: AgentRoleType.USER,
+        type: AgentMessageType.TEXT,
+        content: responseText,
+        createTime: DateTime(2026, 1, 1),
+      ),
     );
+    await agentMessageHandler.onDone();
   }
 
   @override
-  Future<List<AgentMessage>> getHistory(Session session) async {
+  Future<List<AgentMessage>> getHistory(
+    Session session, {
+    int? page,
+    int? pageSize,
+  }) async {
     getHistoryCalls += 1;
     return [
       AgentMessage(
@@ -562,13 +597,42 @@ class _HistoryLiteAgentSdk extends LiteAgentSDK {
     UserTask userTask,
     AgentMessageHandler agentMessageHandler,
   ) async {
-    unawaited(Future<void>(() async => agentMessageHandler.onDone()));
+    await agentMessageHandler.onDone();
   }
 
   @override
-  Future<List<AgentMessage>> getHistory(Session session) async {
+  Future<List<AgentMessage>> getHistory(
+    Session session, {
+    int? page,
+    int? pageSize,
+  }) async {
     return historyMessages;
   }
+}
+
+class _FailingChatLiteAgentSdk extends LiteAgentSDK {
+  _FailingChatLiteAgentSdk() : super(baseUrl: 'http://127.0.0.1:65535');
+
+  @override
+  Future<Session> initSession({Capability? capability, String? agentId}) async {
+    return Session(sessionId: 'failed-chat-session');
+  }
+
+  @override
+  Future<void> chat(
+    Session session,
+    UserTask userTask,
+    AgentMessageHandler agentMessageHandler,
+  ) async {
+    throw Exception('tool_loop_limit_exceeded');
+  }
+
+  @override
+  Future<List<AgentMessage>> getHistory(
+    Session session, {
+    int? page,
+    int? pageSize,
+  }) async => const [];
 }
 
 class _DelayedHistoryLiteAgentSdk extends LiteAgentSDK {
@@ -592,11 +656,15 @@ class _DelayedHistoryLiteAgentSdk extends LiteAgentSDK {
     UserTask userTask,
     AgentMessageHandler agentMessageHandler,
   ) async {
-    unawaited(Future<void>(() async => agentMessageHandler.onDone()));
+    await agentMessageHandler.onDone();
   }
 
   @override
-  Future<List<AgentMessage>> getHistory(Session session) async {
+  Future<List<AgentMessage>> getHistory(
+    Session session, {
+    int? page,
+    int? pageSize,
+  }) async {
     final index = getHistoryCalls.clamp(0, historySnapshots.length - 1);
     getHistoryCalls += 1;
     return historySnapshots[index];
@@ -625,26 +693,26 @@ class _StreamFunctionLiteAgentSdk extends LiteAgentSDK {
     UserTask userTask,
     AgentMessageHandler agentMessageHandler,
   ) async {
-    unawaited(
-      Future<void>(() async {
-        await agentMessageHandler.onStreamFunctionCall(
-          session.sessionId,
-          ot.FunctionCall(
-            id: 'call-1',
-            name: 'daemon_tool-a__search_news',
-            arguments: const {'query': 'latest AI news'},
-          ),
-          observedEvents.add,
-        );
-        if (observedEvents.isNotEmpty) {
-          await agentMessageHandler.onDone();
-        }
-      }),
+    await agentMessageHandler.onStreamFunctionCall(
+      session.sessionId,
+      ot.FunctionCall(
+        id: 'call-1',
+        name: 'daemon_tool-a__search_news',
+        arguments: const {'query': 'latest AI news'},
+      ),
+      observedEvents.add,
     );
+    if (observedEvents.isNotEmpty) {
+      await agentMessageHandler.onDone();
+    }
   }
 
   @override
-  Future<List<AgentMessage>> getHistory(Session session) async => const [];
+  Future<List<AgentMessage>> getHistory(
+    Session session, {
+    int? page,
+    int? pageSize,
+  }) async => const [];
 }
 
 class _RecordingModeAwareDaemonClient extends DaemonClient {

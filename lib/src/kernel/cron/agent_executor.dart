@@ -117,6 +117,17 @@ class AgentCronExecutor implements CronTaskExecutor {
             'parentTaskId': message.parentTaskId,
           });
           completeIfPending();
+        } else {
+          final terminalError = _rootTaskTerminalError(message);
+          if (terminalError != null) {
+            _debugPrintStage('executor_task_status_failed', {
+              'sessionId': session.sessionId,
+              'taskId': message.taskId,
+              'parentTaskId': message.parentTaskId,
+              'error': terminalError,
+            });
+            completeIfPending(error: terminalError);
+          }
         }
         await onMessage?.call(message);
       },
@@ -136,11 +147,20 @@ class AgentCronExecutor implements CronTaskExecutor {
         completeIfPending(error: error.toString());
       },
     );
-    await activeSdk.chat(session, task.spec.toUserTask(), handler);
-    _debugPrintStage('executor_chat_started', {
-      'sessionId': session.sessionId,
-      'cronId': task.cronId,
-    });
+    try {
+      await activeSdk.chat(session, task.spec.toUserTask(), handler);
+      _debugPrintStage('executor_chat_finished', {
+        'sessionId': session.sessionId,
+        'cronId': task.cronId,
+      });
+    } catch (error) {
+      _debugPrintStage('executor_chat_failed', {
+        'sessionId': session.sessionId,
+        'cronId': task.cronId,
+        'error': error.toString(),
+      });
+      completeIfPending(error: error.toString());
+    }
     final baseResult = await completer.future.timeout(
       Duration(seconds: task.spec.timeoutSeconds),
       onTimeout: () => CronExecutionResult(
@@ -353,6 +373,12 @@ class AgentCronExecutor implements CronTaskExecutor {
       'auto': capability.auto,
       'enableThinking': capability.enableThinking,
       'toolReturnPackMinLength': capability.toolReturnPackMinLength,
+      'maxLlmRequests': capability.maxLlmRequests,
+      'maxToolRounds': capability.maxToolRounds,
+      'maxToolCalls': capability.maxToolCalls,
+      'maxConsecutiveIdenticalToolRounds':
+          capability.maxConsecutiveIdenticalToolRounds,
+      'maxTaskDurationSeconds': capability.maxTaskDurationSeconds,
       'llmConfig': _debugLlmConfig(capability.llmConfig),
       'llmConfigList': capability.llmConfigList
           ?.map(_debugLlmConfig)
@@ -519,18 +545,40 @@ class AgentCronExecutor implements CronTaskExecutor {
   }
 
   bool _isRootTaskDoneMessage(AgentMessage message) {
+    return _rootTaskStatus(message)?['status'] == TaskStatusType.DONE;
+  }
+
+  String? _rootTaskTerminalError(AgentMessage message) {
+    final status = _rootTaskStatus(message);
+    if (status == null) {
+      return null;
+    }
+    final value = status['status'];
+    if (value == TaskStatusType.STOP) {
+      return 'Cron task stopped.';
+    }
+    if (value != TaskStatusType.EXCEPTION) {
+      return null;
+    }
+    final description = status['description'];
+    if (description is Map && description.isNotEmpty) {
+      return 'Cron task failed: ${jsonEncode(description)}';
+    }
+    return 'Cron task failed.';
+  }
+
+  Map<dynamic, dynamic>? _rootTaskStatus(AgentMessage message) {
     if (message.parentTaskId != null && message.parentTaskId!.isNotEmpty) {
-      return false;
+      return null;
     }
     if (message.type != AgentMessageType.TASK_STATUS) {
-      return false;
+      return null;
     }
     final content = _normalizeContent(message.content);
     if (content is! Map) {
-      return false;
+      return null;
     }
-    final status = content['status'];
-    return status is String && status == 'done';
+    return content;
   }
 
   bool _looksLikeStructuredStatusText(String text) {

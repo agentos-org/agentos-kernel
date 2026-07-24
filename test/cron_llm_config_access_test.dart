@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:agentos_kernel/src/kernel/agent/config.dart';
 import 'package:agentos_kernel/src/kernel/agent/model.dart';
 import 'package:agentos_kernel/src/kernel/cron/llm_config_access.dart';
@@ -99,27 +97,27 @@ class _FakeLiteAgentSdk extends LiteAgentSDK {
     UserTask userTask,
     AgentMessageHandler agentMessageHandler,
   ) async {
-    unawaited(
-      Future<void>(() async {
-        await agentMessageHandler.onMessage(
-          session.sessionId,
-          AgentMessage(
-            sessionId: session.sessionId,
-            taskId: 'task-1',
-            role: AgentRoleType.LLM,
-            to: AgentRoleType.USER,
-            type: AgentMessageType.TEXT,
-            content: 'cron finished',
-            createTime: DateTime(2026, 1, 1),
-          ),
-        );
-        await agentMessageHandler.onDone();
-      }),
+    await agentMessageHandler.onMessage(
+      session.sessionId,
+      AgentMessage(
+        sessionId: session.sessionId,
+        taskId: 'task-1',
+        role: AgentRoleType.LLM,
+        to: AgentRoleType.USER,
+        type: AgentMessageType.TEXT,
+        content: 'cron finished',
+        createTime: DateTime(2026, 1, 1),
+      ),
     );
+    await agentMessageHandler.onDone();
   }
 
   @override
-  Future<List<AgentMessage>> getHistory(Session session) async {
+  Future<List<AgentMessage>> getHistory(
+    Session session, {
+    int? page,
+    int? pageSize,
+  }) async {
     getHistoryCalls += 1;
     return [
       AgentMessage(

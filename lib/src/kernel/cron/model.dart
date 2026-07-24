@@ -41,6 +41,7 @@ class AgentCronSpec {
       auto: true,
       llmConfigList: llmConfigList,
       enableThinking: true,
+      maxTaskDurationSeconds: timeoutSeconds > 0 ? timeoutSeconds : 3600,
     );
   }
 

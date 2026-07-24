@@ -21,6 +21,7 @@ class MemorySummarizer {
   final LlmConfigResolver? llmConfigResolver;
   final KernelLogger? logger;
   final Duration interval;
+  final Duration taskTimeout;
   final Duration recentWindow;
   final int maxRecords;
   final int minRecords;
@@ -28,7 +29,7 @@ class MemorySummarizer {
   final bool enabled;
 
   Timer? _timer;
-  bool _running = false;
+  Future<List<MemorySummary>>? _activeSummarization;
   bool _dirty = true;
   int _bucketCursor = 0;
   int _remainingDirtyBucketScans = MemorySummaryBucket.values.length;
@@ -51,6 +52,7 @@ class MemorySummarizer {
     this.llmConfigResolver,
     this.logger,
     this.interval = const Duration(minutes: 30),
+    this.taskTimeout = const Duration(minutes: 2),
     this.recentWindow = const Duration(hours: 24),
     this.maxRecords = 200,
     this.minRecords = 1,
@@ -71,20 +73,32 @@ class MemorySummarizer {
   }
 
   Future<void> _tick() async {
-    if (_running || !_dirty || !llmQueue.isIdle) {
+    if (_activeSummarization != null || !_dirty || !llmQueue.isIdle) {
       return;
     }
-    _running = true;
     try {
       await summarize();
     } catch (error) {
       logger?.error('Memory summarization failed.', error);
-    } finally {
-      _running = false;
     }
   }
 
-  Future<List<MemorySummary>> summarize({bool fullScan = false}) async {
+  Future<List<MemorySummary>> summarize({bool fullScan = false}) {
+    final active = _activeSummarization;
+    if (active != null) {
+      return active;
+    }
+    late final Future<List<MemorySummary>> tracked;
+    tracked = _summarize(fullScan: fullScan).whenComplete(() {
+      if (identical(_activeSummarization, tracked)) {
+        _activeSummarization = null;
+      }
+    });
+    _activeSummarization = tracked;
+    return tracked;
+  }
+
+  Future<List<MemorySummary>> _summarize({required bool fullScan}) async {
     final now = DateTime.now();
     final all = <MemorySummary>[];
     final buckets = MemorySummaryBucket.values;
@@ -316,10 +330,19 @@ class MemorySummarizer {
       modelKey: modelKey,
       run: (context) async {
         final sdk = client.sdk;
+        final taskTimeoutSeconds = taskTimeout.inSeconds > 0
+            ? taskTimeout.inSeconds
+            : 1;
         final capability = Capability(
           llmConfig: effectiveConfig,
           systemPrompt: systemPrompt,
           callbackOpenTool: CallbackOpenTool(opentool: _summaryToolSpecJson()),
+          timeoutSeconds: taskTimeoutSeconds,
+          maxLlmRequests: 2,
+          maxToolRounds: 1,
+          maxToolCalls: 1,
+          maxConsecutiveIdenticalToolRounds: 1,
+          maxTaskDurationSeconds: taskTimeoutSeconds,
         );
         final session = await sdk.initSession(capability: capability);
         final task = UserTask(
@@ -418,7 +441,13 @@ class _SummaryToolHandler extends AgentMessageHandler {
     final call = _resolveToolCall(functionCall);
     if (call.name == 'write_memory_summary') {
       onPayload(call.arguments);
-      return ToolReturn(id: functionCall.id, result: {'status': 'accepted'});
+      return ToolReturn(
+        id: functionCall.id,
+        result: {
+          'status': 'completed',
+          'message': 'Memory summary stored. Do not call this tool again.',
+        },
+      );
     }
     return ToolReturn(
       id: functionCall.id,
