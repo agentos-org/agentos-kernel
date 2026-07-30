@@ -1,3 +1,12 @@
+## 0.1.2
+
+- Upgrade `liteagent_sdk_dart` to 0.3 and adapt cron execution to the updated
+  SDK.
+- Add strict limits to background LLM work to prevent runaway memory summary
+  and preference extraction loops.
+- Disable daemon preset publishing while preserving explicit daemon
+  configuration.
+
 ## 0.1.1
 
 - Separate vector store and embedding model API keys while preserving backward
