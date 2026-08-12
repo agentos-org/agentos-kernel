@@ -1,9 +1,12 @@
+## 0.1.3
+
+- Upgrade `opentool_daemon` to 0.5 and align `opentool_dart` with its minimum
+  supported 2.0.1 release.
+
 ## 0.1.2
 
 - Upgrade `liteagent_sdk_dart` to 0.3 and adapt cron execution to the updated
   SDK.
-- Upgrade `opentool_daemon` to 0.5 and align `opentool_dart` with its minimum
-  supported 2.0.1 release.
 - Add strict limits to background LLM work to prevent runaway memory summary
   and preference extraction loops.
 - Disable daemon preset publishing while preserving explicit daemon
