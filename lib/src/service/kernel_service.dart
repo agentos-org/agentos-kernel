@@ -113,11 +113,13 @@ class KernelRuntimeConfig {
     this.memorySummaryRecentWindow = const Duration(hours: 24),
     this.memorySummaryMaxRecords = 200,
     this.memorySummaryMinRecords = 20,
-    this.memorySummaryEnabled = true,
+    // Temporarily opt in while background memory summarization is not needed.
+    this.memorySummaryEnabled = false,
     this.memorySummaryInterval = const Duration(minutes: 30),
     this.memorySummaryTaskTimeout = const Duration(minutes: 2),
     this.memorySummaryMaxScopesPerRun = 1,
-    this.preferenceExtractionEnabled = true,
+    // Temporarily opt in while background preference extraction is not needed.
+    this.preferenceExtractionEnabled = false,
     this.preferenceExtractionInterval = const Duration(minutes: 10),
     this.preferenceExtractionTaskTimeout = const Duration(minutes: 2),
     this.preferenceExtractionMaxPerRun = 1,
