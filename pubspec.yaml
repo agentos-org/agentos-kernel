@@ -1,6 +1,6 @@
 name: agentos_kernel
 description: Kernel modules for agent orchestration and memory.
-version: 0.1.3
+version: 0.1.4
 repository: https://github.com/agentos-org/agentos-kernel
 
 environment:

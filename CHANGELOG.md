@@ -1,3 +1,7 @@
+## 0.1.4
+
+- Upgrade `liteagent_sdk_dart` to 0.4.0.
+
 ## 0.1.3
 
 - Upgrade `opentool_daemon` to 0.5 and align `opentool_dart` with its minimum
