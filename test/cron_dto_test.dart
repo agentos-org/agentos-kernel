@@ -88,6 +88,7 @@ description: Break work into clear ordered steps before execution.
         final encoded = task.toJson();
         final decoded = CronTaskDto.fromJson(encoded);
 
+        expect(encoded.containsKey('userId'), isFalse);
         expect(decoded.spec.llmConfig, isNotNull);
         expect(decoded.spec.llmConfig!.baseUrl, 'https://api.example.com/v1');
         expect(decoded.spec.llmConfig!.model, 'external-model');

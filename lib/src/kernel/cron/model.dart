@@ -45,13 +45,21 @@ class AgentCronSpec {
     );
   }
 
-  UserTask toUserTask({DateTime? now}) {
-    return UserTask(content: _contentWithCurrentTime(now: now), isChunk: false);
+  UserTask toUserTask({DateTime? now, String? timezoneName}) {
+    return UserTask(
+      content: _contentWithCurrentTime(now: now, timezoneName: timezoneName),
+      isChunk: false,
+    );
   }
 
-  List<Content> _contentWithCurrentTime({DateTime? now}) {
+  List<Content> _contentWithCurrentTime({DateTime? now, String? timezoneName}) {
     final currentTime = _formatCurrentTime(now ?? DateTime.now());
-    final suffix = '*Current Time: $currentTime*';
+    final normalizedTimezone = timezoneName?.trim();
+    final timezoneSuffix =
+        normalizedTimezone == null || normalizedTimezone.isEmpty
+        ? ''
+        : ' ($normalizedTimezone)';
+    final suffix = '*Current Time: $currentTime$timezoneSuffix*';
     if (content.isEmpty) {
       return [Content(type: ContentType.text, message: suffix)];
     }
@@ -80,7 +88,6 @@ class CronTaskDefinition {
   final String name;
   final String schedule;
   final String source;
-  final String? userId;
   final String? sessionId;
   final String? timezone;
   final CronTaskConcurrencyPolicy concurrency;
@@ -101,7 +108,6 @@ class CronTaskDefinition {
     required this.createdAt,
     required this.updatedAt,
     required this.status,
-    this.userId,
     this.sessionId,
     this.timezone,
     this.lastRunAt,
@@ -114,7 +120,6 @@ class CronTaskDefinition {
     String? name,
     String? schedule,
     String? source,
-    Object? userId = _sentinel,
     Object? sessionId = _sentinel,
     Object? timezone = _sentinel,
     CronTaskConcurrencyPolicy? concurrency,
@@ -129,7 +134,6 @@ class CronTaskDefinition {
       name: name ?? this.name,
       schedule: schedule ?? this.schedule,
       source: source ?? this.source,
-      userId: identical(userId, _sentinel) ? this.userId : userId as String?,
       sessionId: identical(sessionId, _sentinel)
           ? this.sessionId
           : sessionId as String?,

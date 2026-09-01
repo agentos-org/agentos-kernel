@@ -245,6 +245,7 @@ class _FakeCronExecutor implements CronTaskExecutor {
   @override
   Future<CronExecutionResult> run(
     CronTaskDefinition task, {
+    DateTime? scheduledAt,
     Future<void> Function(AgentMessage message)? onMessage,
   }) async {
     return CronExecutionResult(
@@ -271,6 +272,7 @@ class _FailingCronExecutor implements CronTaskExecutor {
   @override
   Future<CronExecutionResult> run(
     CronTaskDefinition task, {
+    DateTime? scheduledAt,
     Future<void> Function(AgentMessage message)? onMessage,
   }) async {
     return const CronExecutionResult(error: 'upstream failed');
@@ -281,6 +283,7 @@ class _EchoLlmConfigCronExecutor implements CronTaskExecutor {
   @override
   Future<CronExecutionResult> run(
     CronTaskDefinition task, {
+    DateTime? scheduledAt,
     Future<void> Function(AgentMessage message)? onMessage,
   }) async {
     return CronExecutionResult(
@@ -317,6 +320,7 @@ class _BlockingCronExecutor implements CronTaskExecutor {
   @override
   Future<CronExecutionResult> run(
     CronTaskDefinition task, {
+    DateTime? scheduledAt,
     Future<void> Function(AgentMessage message)? onMessage,
   }) async {
     if (!started.isCompleted) {
@@ -356,6 +360,7 @@ class _StreamingCronExecutor implements CronTaskExecutor {
   @override
   Future<CronExecutionResult> run(
     CronTaskDefinition task, {
+    DateTime? scheduledAt,
     Future<void> Function(AgentMessage message)? onMessage,
   }) async {
     final partial = AgentMessage(

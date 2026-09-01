@@ -10,6 +10,7 @@ import '../logging/logger.dart';
 import 'daemon_open_spec_provider.dart';
 import 'executor.dart';
 import 'model.dart';
+import 'timezone.dart';
 
 class AgentCronExecutor implements CronTaskExecutor {
   static const int _historyRetryAttempts = 3;
@@ -41,6 +42,7 @@ class AgentCronExecutor implements CronTaskExecutor {
   @override
   Future<CronExecutionResult> run(
     CronTaskDefinition task, {
+    DateTime? scheduledAt,
     Future<void> Function(AgentMessage message)? onMessage,
   }) async {
     final activeSdk = sdkResolver?.call() ?? sdk;
@@ -49,36 +51,59 @@ class AgentCronExecutor implements CronTaskExecutor {
         error: 'No available LiteAgent SDK for cron execution.',
       );
     }
-    final llmConfig = task.spec.llmConfig ?? llmConfigResolver?.call();
-    if (llmConfig == null) {
-      return const CronExecutionResult(
-        error: 'No available LLM config for cron execution.',
-      );
+    final requestedSessionId = _normalizeSessionId(task.sessionId);
+    LLMConfig? normalizedLlmConfig;
+    List<LLMConfig>? normalizedLlmConfigList;
+    if (requestedSessionId == null) {
+      final llmConfig = task.spec.llmConfig ?? llmConfigResolver?.call();
+      if (llmConfig == null) {
+        return const CronExecutionResult(
+          error: 'No available LLM config for cron execution.',
+        );
+      }
+      normalizedLlmConfig = normalizeLlmConfigForLiteAgent(llmConfig);
+      normalizedLlmConfigList = (task.spec.llmConfig != null)
+          ? <LLMConfig>[normalizedLlmConfig]
+          : llmConfigListResolver
+                ?.call()
+                .map(normalizeLlmConfigForLiteAgent)
+                .toList(growable: false);
     }
-    final normalizedLlmConfig = normalizeLlmConfigForLiteAgent(llmConfig);
-    final normalizedLlmConfigList = (task.spec.llmConfig != null)
-        ? <LLMConfig>[normalizedLlmConfig]
-        : llmConfigListResolver
-              ?.call()
-              .map(normalizeLlmConfigForLiteAgent)
-              .toList(growable: false);
+
     final catalog = await _resolveDaemonToolCatalog();
     final callbackTool = _buildCallbackTool(catalog);
-    final capability = task.spec.toCapability(
-      llmConfig: normalizedLlmConfig,
-      llmConfigList: normalizedLlmConfigList,
-      callbackOpenTool: callbackTool.callback,
-    );
-    _debugPrintStage('executor_capability_built', {
-      'cronId': task.cronId,
-      'taskName': task.name,
-      'capability': _debugCapability(capability, callbackTool),
-    });
-    final session = await activeSdk.initSession(capability: capability);
-    _debugPrintStage('executor_session_initialized', {
-      'sessionId': session.sessionId,
-      'cronId': task.cronId,
-    });
+    late final Session session;
+    if (requestedSessionId == null) {
+      final capability = task.spec.toCapability(
+        llmConfig: normalizedLlmConfig!,
+        llmConfigList: normalizedLlmConfigList,
+        callbackOpenTool: callbackTool.callback,
+      );
+      _debugPrintStage('executor_capability_built', {
+        'cronId': task.cronId,
+        'taskName': task.name,
+        'capability': _debugCapability(capability, callbackTool),
+      });
+      try {
+        session = await activeSdk.initSession(capability: capability);
+      } catch (error) {
+        return CronExecutionResult(
+          llmConfig: normalizedLlmConfig,
+          error: error.toString(),
+        );
+      }
+      _debugPrintStage('executor_session_initialized', {
+        'sessionId': session.sessionId,
+        'cronId': task.cronId,
+      });
+    } else {
+      session = Session(sessionId: requestedSessionId);
+      _debugPrintStage('executor_session_reused', {
+        'sessionId': session.sessionId,
+        'cronId': task.cronId,
+      });
+    }
+
     final completer = Completer<CronExecutionResult>();
     void completeIfPending({String? error}) {
       if (completer.isCompleted) {
@@ -144,47 +169,101 @@ class AgentCronExecutor implements CronTaskExecutor {
           'messageCount': messages.length,
           'error': error.toString(),
         });
-        completeIfPending(error: error.toString());
+        completeIfPending(
+          error: requestedSessionId == null
+              ? error.toString()
+              : _sessionFailure(requestedSessionId, error),
+        );
       },
     );
-    try {
-      await activeSdk.chat(session, task.spec.toUserTask(), handler);
-      _debugPrintStage('executor_chat_finished', {
-        'sessionId': session.sessionId,
-        'cronId': task.cronId,
-      });
-    } catch (error) {
-      _debugPrintStage('executor_chat_failed', {
-        'sessionId': session.sessionId,
-        'cronId': task.cronId,
-        'error': error.toString(),
-      });
-      completeIfPending(error: error.toString());
+
+    final executionInstant = (scheduledAt ?? DateTime.now()).toUtc();
+    final taskNow = CronTimeZone.toTaskLocal(
+      executionInstant,
+      timezoneName: task.timezone,
+    );
+    Future<void> runChat() async {
+      try {
+        await activeSdk.chat(
+          session,
+          task.spec.toUserTask(
+            now: taskNow,
+            timezoneName: CronTimeZone.normalize(task.timezone),
+          ),
+          handler,
+        );
+        _debugPrintStage('executor_chat_finished', {
+          'sessionId': session.sessionId,
+          'cronId': task.cronId,
+        });
+      } catch (error) {
+        _debugPrintStage('executor_chat_failed', {
+          'sessionId': session.sessionId,
+          'cronId': task.cronId,
+          'error': error.toString(),
+        });
+        completeIfPending(
+          error: requestedSessionId == null
+              ? error.toString()
+              : _sessionFailure(requestedSessionId, error),
+        );
+      }
     }
-    final baseResult = await completer.future.timeout(
-      Duration(seconds: task.spec.timeoutSeconds),
-      onTimeout: () => CronExecutionResult(
+
+    final chatFuture = runChat();
+    CronExecutionResult baseResult;
+    var timedOut = false;
+    try {
+      baseResult = await completer.future.timeout(
+        Duration(seconds: task.spec.timeoutSeconds),
+      );
+    } on TimeoutException {
+      timedOut = true;
+      await _stopSession(activeSdk, session);
+      baseResult = CronExecutionResult(
         liteAgentSessionId: session.sessionId,
         error: 'Cron task timed out.',
-      ),
-    );
+        messages: List<AgentMessage>.unmodifiable(messages),
+      );
+    }
+    if (!timedOut) {
+      await chatFuture;
+    }
     _debugPrintStage('executor_base_result', {
       'sessionId': session.sessionId,
       'success': baseResult.success,
       if (baseResult.error != null) 'error': baseResult.error,
     });
-    var timeline = await _resolveMessages(
-      activeSdk,
-      session,
-      collectedMessages: messages,
-    );
-    if (baseResult.success) {
-      timeline = await _resolveMessagesUntilDisplayable(
+    if (timedOut) {
+      return CronExecutionResult(
+        llmConfig: normalizedLlmConfig,
+        liteAgentSessionId: session.sessionId,
+        error: baseResult.error,
+        messages: baseResult.messages,
+      );
+    }
+
+    List<AgentMessage> timeline;
+    String? historyError;
+    try {
+      timeline = await _resolveMessages(
         activeSdk,
         session,
         collectedMessages: messages,
-        initialTimeline: timeline,
+        failOnHistoryError: requestedSessionId != null,
       );
+      if (baseResult.success) {
+        timeline = await _resolveMessagesUntilDisplayable(
+          activeSdk,
+          session,
+          collectedMessages: messages,
+          initialTimeline: timeline,
+          failOnHistoryError: requestedSessionId != null,
+        );
+      }
+    } catch (error) {
+      historyError = _sessionFailure(session.sessionId, error);
+      timeline = List<AgentMessage>.unmodifiable(messages);
     }
     final displayMessage = _pickDisplayableMessage(timeline);
     final summaryMessage = displayMessage ?? _pickSummaryMessage(timeline);
@@ -197,13 +276,35 @@ class AgentCronExecutor implements CronTaskExecutor {
     );
     return CronExecutionResult(
       llmConfig: normalizedLlmConfig,
-      liteAgentSessionId: baseResult.liteAgentSessionId,
-      error: baseResult.error,
+      liteAgentSessionId: baseResult.liteAgentSessionId ?? session.sessionId,
+      error: baseResult.error ?? historyError,
       result: _messageToResult(summaryMessage),
       messages: timeline,
       displayMessageId: displayMessage?.taskId,
       displayText: _extractDisplayText(displayMessage),
     );
+  }
+
+  Future<void> _stopSession(LiteAgentSDK sdk, Session session) async {
+    try {
+      await sdk.stop(session).timeout(const Duration(seconds: 2));
+    } catch (error) {
+      logger?.warn(
+        'Failed to stop timed out cron session ${session.sessionId}: $error',
+      );
+    }
+  }
+
+  String? _normalizeSessionId(String? sessionId) {
+    final normalized = sessionId?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    return normalized;
+  }
+
+  String _sessionFailure(String sessionId, Object error) {
+    return 'Cron session "$sessionId" is unavailable: $error';
   }
 
   _CronCallbackTool _buildCallbackTool(
@@ -295,6 +396,7 @@ class AgentCronExecutor implements CronTaskExecutor {
     Session session, {
     required List<AgentMessage> collectedMessages,
     required List<AgentMessage> initialTimeline,
+    required bool failOnHistoryError,
   }) async {
     var timeline = initialTimeline;
     if (_pickDisplayableMessage(timeline) != null) {
@@ -310,6 +412,7 @@ class AgentCronExecutor implements CronTaskExecutor {
         sdk,
         session,
         collectedMessages: collectedMessages,
+        failOnHistoryError: failOnHistoryError,
       );
       if (_pickDisplayableMessage(timeline) != null) {
         return timeline;
@@ -435,6 +538,7 @@ class AgentCronExecutor implements CronTaskExecutor {
     LiteAgentSDK sdk,
     Session session, {
     required List<AgentMessage> collectedMessages,
+    bool failOnHistoryError = false,
   }) async {
     final merged = <String, AgentMessage>{};
     for (final message in collectedMessages) {
@@ -454,6 +558,12 @@ class AgentCronExecutor implements CronTaskExecutor {
         merged[_messageKey(message)] = message;
       }
     } catch (error) {
+      if (failOnHistoryError) {
+        throw StateError(
+          'Unable to read history for cron session "${session.sessionId}": '
+          '$error',
+        );
+      }
       logger?.warn(
         'Failed to load cron history for ${session.sessionId}: $error',
       );

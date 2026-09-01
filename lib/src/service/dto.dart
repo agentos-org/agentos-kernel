@@ -46,7 +46,6 @@ class CronTaskDto {
   final String name;
   final String schedule;
   final String source;
-  final String? userId;
   final String? sessionId;
   final String? timezone;
   final bool enabled;
@@ -69,7 +68,6 @@ class CronTaskDto {
     required this.createdAt,
     required this.updatedAt,
     required this.spec,
-    this.userId,
     this.sessionId,
     this.timezone,
     this.lastRunAt,

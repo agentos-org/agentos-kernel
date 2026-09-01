@@ -13,10 +13,7 @@ FunctionCallDto _$FunctionCallDtoFromJson(Map<String, dynamic> json) =>
     );
 
 Map<String, dynamic> _$FunctionCallDtoToJson(FunctionCallDto instance) =>
-    <String, dynamic>{
-      'name': instance.name,
-      'arguments': instance.arguments,
-    };
+    <String, dynamic>{'name': instance.name, 'arguments': instance.arguments};
 
 AgentCronSpecDto _$AgentCronSpecDtoFromJson(Map<String, dynamic> json) =>
     AgentCronSpecDto(
@@ -28,8 +25,9 @@ AgentCronSpecDto _$AgentCronSpecDtoFromJson(Map<String, dynamic> json) =>
       llmConfig: json['llmConfig'] == null
           ? null
           : LLMConfig.fromJson(json['llmConfig'] as Map<String, dynamic>),
-      skills:
-          (json['skills'] as List<dynamic>?)?.map((e) => e as String).toList(),
+      skills: (json['skills'] as List<dynamic>?)
+          ?.map((e) => e as String)
+          .toList(),
     );
 
 Map<String, dynamic> _$AgentCronSpecDtoToJson(AgentCronSpecDto instance) {
@@ -51,27 +49,28 @@ Map<String, dynamic> _$AgentCronSpecDtoToJson(AgentCronSpecDto instance) {
 }
 
 CronTaskDto _$CronTaskDtoFromJson(Map<String, dynamic> json) => CronTaskDto(
-      cronId: json['cronId'] as String,
-      name: json['name'] as String,
-      schedule: json['schedule'] as String,
-      source: json['source'] as String,
-      enabled: json['enabled'] as bool,
-      status: json['status'] as String,
-      concurrency:
-          $enumDecode(_$CronTaskConcurrencyDtoEnumMap, json['concurrency']),
-      createdAt: DateTime.parse(json['createdAt'] as String),
-      updatedAt: DateTime.parse(json['updatedAt'] as String),
-      spec: AgentCronSpecDto.fromJson(json['spec'] as Map<String, dynamic>),
-      userId: json['userId'] as String?,
-      sessionId: json['sessionId'] as String?,
-      timezone: json['timezone'] as String?,
-      lastRunAt: json['lastRunAt'] == null
-          ? null
-          : DateTime.parse(json['lastRunAt'] as String),
-      nextRunAt: json['nextRunAt'] == null
-          ? null
-          : DateTime.parse(json['nextRunAt'] as String),
-    );
+  cronId: json['cronId'] as String,
+  name: json['name'] as String,
+  schedule: json['schedule'] as String,
+  source: json['source'] as String,
+  enabled: json['enabled'] as bool,
+  status: json['status'] as String,
+  concurrency: $enumDecode(
+    _$CronTaskConcurrencyDtoEnumMap,
+    json['concurrency'],
+  ),
+  createdAt: DateTime.parse(json['createdAt'] as String),
+  updatedAt: DateTime.parse(json['updatedAt'] as String),
+  spec: AgentCronSpecDto.fromJson(json['spec'] as Map<String, dynamic>),
+  sessionId: json['sessionId'] as String?,
+  timezone: json['timezone'] as String?,
+  lastRunAt: json['lastRunAt'] == null
+      ? null
+      : DateTime.parse(json['lastRunAt'] as String),
+  nextRunAt: json['nextRunAt'] == null
+      ? null
+      : DateTime.parse(json['nextRunAt'] as String),
+);
 
 Map<String, dynamic> _$CronTaskDtoToJson(CronTaskDto instance) {
   final val = <String, dynamic>{
@@ -87,7 +86,6 @@ Map<String, dynamic> _$CronTaskDtoToJson(CronTaskDto instance) {
     }
   }
 
-  writeNotNull('userId', instance.userId);
   writeNotNull('sessionId', instance.sessionId);
   writeNotNull('timezone', instance.timezone);
   val['enabled'] = instance.enabled;
@@ -143,25 +141,25 @@ Map<String, dynamic> _$CronTaskListItemDtoToJson(CronTaskListItemDto instance) {
 }
 
 CronRunDto _$CronRunDtoFromJson(Map<String, dynamic> json) => CronRunDto(
-      runId: json['runId'] as String,
-      cronId: json['cronId'] as String,
-      trigger: json['trigger'] as String,
-      status: json['status'] as String,
-      scheduledAt: DateTime.parse(json['scheduledAt'] as String),
-      startedAt: DateTime.parse(json['startedAt'] as String),
-      hasDisplayableResult: json['hasDisplayableResult'] as bool,
-      finishedAt: json['finishedAt'] == null
-          ? null
-          : DateTime.parse(json['finishedAt'] as String),
-      llmConfig: json['llmConfig'] == null
-          ? null
-          : LLMConfig.fromJson(json['llmConfig'] as Map<String, dynamic>),
-      liteAgentSessionId: json['liteAgentSessionId'] as String?,
-      error: json['error'] as String?,
-      result: json['result'] as Map<String, dynamic>?,
-      displayMessageId: json['displayMessageId'] as String?,
-      displayText: json['displayText'] as String?,
-    );
+  runId: json['runId'] as String,
+  cronId: json['cronId'] as String,
+  trigger: json['trigger'] as String,
+  status: json['status'] as String,
+  scheduledAt: DateTime.parse(json['scheduledAt'] as String),
+  startedAt: DateTime.parse(json['startedAt'] as String),
+  hasDisplayableResult: json['hasDisplayableResult'] as bool,
+  finishedAt: json['finishedAt'] == null
+      ? null
+      : DateTime.parse(json['finishedAt'] as String),
+  llmConfig: json['llmConfig'] == null
+      ? null
+      : LLMConfig.fromJson(json['llmConfig'] as Map<String, dynamic>),
+  liteAgentSessionId: json['liteAgentSessionId'] as String?,
+  error: json['error'] as String?,
+  result: json['result'] as Map<String, dynamic>?,
+  displayMessageId: json['displayMessageId'] as String?,
+  displayText: json['displayText'] as String?,
+);
 
 Map<String, dynamic> _$CronRunDtoToJson(CronRunDto instance) {
   final val = <String, dynamic>{
@@ -250,18 +248,19 @@ Map<String, dynamic> _$CronRunMessageDtoToJson(CronRunMessageDto instance) =>
     };
 
 CronSchedulerSnapshotDto _$CronSchedulerSnapshotDtoFromJson(
-        Map<String, dynamic> json) =>
-    CronSchedulerSnapshotDto(
-      running: json['running'] as bool,
-      activeTaskCount: (json['activeTaskCount'] as num).toInt(),
-      runningTaskCount: (json['runningTaskCount'] as num).toInt(),
-      lastTickAt: json['lastTickAt'] == null
-          ? null
-          : DateTime.parse(json['lastTickAt'] as String),
-    );
+  Map<String, dynamic> json,
+) => CronSchedulerSnapshotDto(
+  running: json['running'] as bool,
+  activeTaskCount: (json['activeTaskCount'] as num).toInt(),
+  runningTaskCount: (json['runningTaskCount'] as num).toInt(),
+  lastTickAt: json['lastTickAt'] == null
+      ? null
+      : DateTime.parse(json['lastTickAt'] as String),
+);
 
 Map<String, dynamic> _$CronSchedulerSnapshotDtoToJson(
-    CronSchedulerSnapshotDto instance) {
+  CronSchedulerSnapshotDto instance,
+) {
   final val = <String, dynamic>{
     'running': instance.running,
     'activeTaskCount': instance.activeTaskCount,
@@ -279,14 +278,14 @@ Map<String, dynamic> _$CronSchedulerSnapshotDtoToJson(
 }
 
 RagBaseDto _$RagBaseDtoFromJson(Map<String, dynamic> json) => RagBaseDto(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      docsName: json['docsName'] as String,
-      docsId: json['docsId'] as String,
-      createdAt: DateTime.parse(json['createdAt'] as String),
-      updatedAt: DateTime.parse(json['updatedAt'] as String),
-      metadata: json['metadata'] as Map<String, dynamic>?,
-    );
+  id: json['id'] as String,
+  name: json['name'] as String,
+  docsName: json['docsName'] as String,
+  docsId: json['docsId'] as String,
+  createdAt: DateTime.parse(json['createdAt'] as String),
+  updatedAt: DateTime.parse(json['updatedAt'] as String),
+  metadata: json['metadata'] as Map<String, dynamic>?,
+);
 
 Map<String, dynamic> _$RagBaseDtoToJson(RagBaseDto instance) {
   final val = <String, dynamic>{
@@ -364,20 +363,21 @@ Map<String, dynamic> _$RagDocumentDtoToJson(RagDocumentDto instance) {
 }
 
 RagDocumentListItemDto _$RagDocumentListItemDtoFromJson(
-        Map<String, dynamic> json) =>
-    RagDocumentListItemDto(
-      id: json['id'] as String,
-      baseId: json['baseId'] as String,
-      title: json['title'] as String,
-      updatedAt: DateTime.parse(json['updatedAt'] as String),
-      syncStatus: json['syncStatus'] as String,
-      indexedAt: json['indexedAt'] == null
-          ? null
-          : DateTime.parse(json['indexedAt'] as String),
-    );
+  Map<String, dynamic> json,
+) => RagDocumentListItemDto(
+  id: json['id'] as String,
+  baseId: json['baseId'] as String,
+  title: json['title'] as String,
+  updatedAt: DateTime.parse(json['updatedAt'] as String),
+  syncStatus: json['syncStatus'] as String,
+  indexedAt: json['indexedAt'] == null
+      ? null
+      : DateTime.parse(json['indexedAt'] as String),
+);
 
 Map<String, dynamic> _$RagDocumentListItemDtoToJson(
-    RagDocumentListItemDto instance) {
+  RagDocumentListItemDto instance,
+) {
   final val = <String, dynamic>{
     'id': instance.id,
     'baseId': instance.baseId,
@@ -397,42 +397,43 @@ Map<String, dynamic> _$RagDocumentListItemDtoToJson(
 }
 
 RagDocumentSyncResultDto _$RagDocumentSyncResultDtoFromJson(
-        Map<String, dynamic> json) =>
-    RagDocumentSyncResultDto(
-      baseId: json['baseId'] as String,
-      documentId: json['documentId'] as String,
-      syncStatus: json['syncStatus'] as String,
-      keptCount: (json['keptCount'] as num).toInt(),
-      updatedCount: (json['updatedCount'] as num).toInt(),
-      insertedCount: (json['insertedCount'] as num).toInt(),
-      deletedCount: (json['deletedCount'] as num).toInt(),
-      syncedAt: DateTime.parse(json['syncedAt'] as String),
-    );
+  Map<String, dynamic> json,
+) => RagDocumentSyncResultDto(
+  baseId: json['baseId'] as String,
+  documentId: json['documentId'] as String,
+  syncStatus: json['syncStatus'] as String,
+  keptCount: (json['keptCount'] as num).toInt(),
+  updatedCount: (json['updatedCount'] as num).toInt(),
+  insertedCount: (json['insertedCount'] as num).toInt(),
+  deletedCount: (json['deletedCount'] as num).toInt(),
+  syncedAt: DateTime.parse(json['syncedAt'] as String),
+);
 
 Map<String, dynamic> _$RagDocumentSyncResultDtoToJson(
-        RagDocumentSyncResultDto instance) =>
-    <String, dynamic>{
-      'baseId': instance.baseId,
-      'documentId': instance.documentId,
-      'syncStatus': instance.syncStatus,
-      'keptCount': instance.keptCount,
-      'updatedCount': instance.updatedCount,
-      'insertedCount': instance.insertedCount,
-      'deletedCount': instance.deletedCount,
-      'syncedAt': instance.syncedAt.toIso8601String(),
-    };
+  RagDocumentSyncResultDto instance,
+) => <String, dynamic>{
+  'baseId': instance.baseId,
+  'documentId': instance.documentId,
+  'syncStatus': instance.syncStatus,
+  'keptCount': instance.keptCount,
+  'updatedCount': instance.updatedCount,
+  'insertedCount': instance.insertedCount,
+  'deletedCount': instance.deletedCount,
+  'syncedAt': instance.syncedAt.toIso8601String(),
+};
 
 RagMarkdownDocumentInputDto _$RagMarkdownDocumentInputDtoFromJson(
-        Map<String, dynamic> json) =>
-    RagMarkdownDocumentInputDto(
-      documentId: json['documentId'] as String,
-      title: json['title'] as String,
-      markdown: json['markdown'] as String,
-      metadata: json['metadata'] as Map<String, dynamic>?,
-    );
+  Map<String, dynamic> json,
+) => RagMarkdownDocumentInputDto(
+  documentId: json['documentId'] as String,
+  title: json['title'] as String,
+  markdown: json['markdown'] as String,
+  metadata: json['metadata'] as Map<String, dynamic>?,
+);
 
 Map<String, dynamic> _$RagMarkdownDocumentInputDtoToJson(
-    RagMarkdownDocumentInputDto instance) {
+  RagMarkdownDocumentInputDto instance,
+) {
   final val = <String, dynamic>{
     'documentId': instance.documentId,
     'title': instance.title,
@@ -450,17 +451,18 @@ Map<String, dynamic> _$RagMarkdownDocumentInputDtoToJson(
 }
 
 RagBatchItemResultDto _$RagBatchItemResultDtoFromJson(
-        Map<String, dynamic> json) =>
-    RagBatchItemResultDto(
-      baseId: json['baseId'] as String,
-      documentId: json['documentId'] as String,
-      status: json['status'] as String,
-      syncStatus: json['syncStatus'] as String,
-      message: json['message'] as String?,
-    );
+  Map<String, dynamic> json,
+) => RagBatchItemResultDto(
+  baseId: json['baseId'] as String,
+  documentId: json['documentId'] as String,
+  status: json['status'] as String,
+  syncStatus: json['syncStatus'] as String,
+  message: json['message'] as String?,
+);
 
 Map<String, dynamic> _$RagBatchItemResultDtoToJson(
-    RagBatchItemResultDto instance) {
+  RagBatchItemResultDto instance,
+) {
   final val = <String, dynamic>{
     'baseId': instance.baseId,
     'documentId': instance.documentId,

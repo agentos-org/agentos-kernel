@@ -1,3 +1,12 @@
+## 0.2.0
+
+- Remove the unused Cron task `userId` from the kernel model, DTO, service API,
+  and storage logic.
+- Support reusing LiteAgent sessions from Cron tasks and task-level IANA
+  timezones with DST-aware scheduling.
+- Add UTC `nextRunAt` tracking and preserve compatibility with existing Cron
+  SQLite databases.
+
 ## 0.1.4
 
 - Upgrade `liteagent_sdk_dart` to 0.4.0.

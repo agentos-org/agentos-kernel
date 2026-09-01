@@ -1,16 +1,17 @@
 import 'dart:async';
 
-import 'package:cron/cron.dart';
-
 import 'model.dart';
+import 'timezone.dart';
 
 typedef CronTaskTrigger =
     Future<void> Function(CronTaskDefinition task, {DateTime? scheduledAt});
 
+/// Schedules each task against its own wall-clock timezone.
 class CronScheduler {
-  Cron? _cron;
+  static const Duration _maxTimerDelay = Duration(days: 1);
+
   final CronTaskTrigger onTrigger;
-  final Map<String, ScheduledTask> _scheduled = {};
+  final Map<String, _ScheduledCronTask> _scheduled = {};
   DateTime? _lastTickAt;
   bool _running = false;
 
@@ -25,7 +26,6 @@ class CronScheduler {
       await refresh(tasks);
       return;
     }
-    _cron = Cron();
     _running = true;
     await refresh(tasks);
   }
@@ -36,8 +36,6 @@ class CronScheduler {
       task.cancel();
     }
     _scheduled.clear();
-    await _cron?.close();
-    _cron = null;
   }
 
   Future<void> refresh(List<CronTaskDefinition> tasks) async {
@@ -52,15 +50,84 @@ class CronScheduler {
       if (!task.enabled) {
         continue;
       }
-      final schedule = Schedule.parse(task.schedule);
-      final cron = _cron;
-      if (cron == null) {
+      final scheduled = _ScheduledCronTask(task);
+      _scheduled[task.cronId] = scheduled;
+      _arm(scheduled);
+    }
+  }
+
+  void _arm(_ScheduledCronTask scheduled) {
+    if (!_isCurrent(scheduled)) {
+      return;
+    }
+    final now = DateTime.now().toUtc();
+    final nextRunAt = CronScheduleCalculator.nextRunAt(
+      schedule: scheduled.task.schedule,
+      timezoneName: scheduled.task.timezone,
+      after: now,
+    );
+    scheduled.nextRunAt = nextRunAt;
+    if (nextRunAt == null) {
+      return;
+    }
+
+    final delay = nextRunAt.difference(now);
+    if (delay <= Duration.zero) {
+      scheduled.timer = Timer(Duration.zero, () => _fire(scheduled));
+      return;
+    }
+    final timerDelay = delay > _maxTimerDelay ? _maxTimerDelay : delay;
+    scheduled.timer = Timer(timerDelay, () {
+      if (!_isCurrent(scheduled)) {
         return;
       }
-      _scheduled[task.cronId] = cron.schedule(schedule, () async {
-        _lastTickAt = DateTime.now();
-        await onTrigger(task, scheduledAt: _lastTickAt);
-      });
+      if (delay > _maxTimerDelay) {
+        _arm(scheduled);
+      } else {
+        _fire(scheduled);
+      }
+    });
+  }
+
+  Future<void> _fire(_ScheduledCronTask scheduled) async {
+    if (!_isCurrent(scheduled)) {
+      return;
     }
+    final nextRunAt = scheduled.nextRunAt;
+    if (nextRunAt == null) {
+      return;
+    }
+    _lastTickAt = DateTime.now().toUtc();
+    try {
+      await onTrigger(scheduled.task, scheduledAt: nextRunAt);
+    } catch (_) {
+      // The module persists execution failures. A timer callback must not
+      // surface an unhandled asynchronous error and stop scheduling siblings.
+    } finally {
+      if (_isCurrent(scheduled)) {
+        _arm(scheduled);
+      }
+    }
+  }
+
+  bool _isCurrent(_ScheduledCronTask scheduled) {
+    return _running &&
+        !scheduled.cancelled &&
+        identical(_scheduled[scheduled.task.cronId], scheduled);
+  }
+}
+
+class _ScheduledCronTask {
+  final CronTaskDefinition task;
+  Timer? timer;
+  DateTime? nextRunAt;
+  bool cancelled = false;
+
+  _ScheduledCronTask(this.task);
+
+  void cancel() {
+    cancelled = true;
+    timer?.cancel();
+    timer = null;
   }
 }

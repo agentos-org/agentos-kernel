@@ -7,12 +7,14 @@ import 'executor.dart';
 import 'model.dart';
 import 'scheduler.dart';
 import 'store.dart';
+import 'timezone.dart';
 
 class CronModule {
   final CronTaskStore _store;
   final CronTaskExecutor _executor;
   late final CronScheduler _scheduler;
   final Set<String> _runningTaskIds = <String>{};
+  final Set<String> _runningSessionIds = <String>{};
   int _taskCounter = 0;
   int _runCounter = 0;
   int _messageCounter = 0;
@@ -28,28 +30,36 @@ class CronModule {
     required String schedule,
     required AgentCronSpec spec,
     required String source,
-    String? userId,
     String? sessionId,
     String? timezone,
     CronTaskConcurrencyPolicy concurrency =
         CronTaskConcurrencyPolicy.skipIfRunning,
     bool enabled = true,
   }) async {
-    final now = DateTime.now();
+    final now = DateTime.now().toUtc();
+    final normalizedTimezone = CronTimeZone.normalize(timezone);
+    CronTimeZone.validate(normalizedTimezone);
+    final normalizedSessionId = _normalizeSessionId(sessionId);
+    final status = enabled ? CronTaskStatus.active : CronTaskStatus.paused;
     final task = CronTaskDefinition(
       cronId: _nextCronId(now),
       name: name,
       schedule: schedule,
       source: source,
-      userId: userId,
-      sessionId: sessionId,
-      timezone: timezone,
+      sessionId: normalizedSessionId,
+      timezone: normalizedTimezone,
       concurrency: concurrency,
       spec: spec,
       createdAt: now,
       updatedAt: now,
-      nextRunAt: null,
-      status: enabled ? CronTaskStatus.active : CronTaskStatus.paused,
+      nextRunAt: enabled
+          ? _nextRunAt(
+              schedule: schedule,
+              timezone: normalizedTimezone,
+              after: now,
+            )
+          : null,
+      status: status,
     );
     final stored = await _store.putTask(task);
     await _refreshSchedule();
@@ -88,18 +98,33 @@ class CronModule {
     bool? enabled,
   }) async {
     final current = await _requireTask(cronId);
+    final now = DateTime.now().toUtc();
+    final normalizedTimezone = timezone == null
+        ? current.timezone
+        : CronTimeZone.normalize(timezone);
+    CronTimeZone.validate(normalizedTimezone);
     final next = current.copyWith(
       name: name,
       schedule: schedule,
       spec: spec,
-      timezone: timezone,
+      timezone: normalizedTimezone,
       concurrency: concurrency,
       status: enabled == null
           ? null
           : (enabled ? CronTaskStatus.active : CronTaskStatus.paused),
-      updatedAt: DateTime.now(),
+      updatedAt: now,
+      nextRunAt: null,
     );
-    final stored = await _store.putTask(next);
+    final recalculated = next.copyWith(
+      nextRunAt: next.enabled
+          ? _nextRunAt(
+              schedule: next.schedule,
+              timezone: next.timezone,
+              after: now,
+            )
+          : null,
+    );
+    final stored = await _store.putTask(recalculated);
     await _refreshSchedule();
     return stored;
   }
@@ -122,6 +147,9 @@ class CronModule {
     DateTime? scheduledAt,
     CronRunTrigger trigger = CronRunTrigger.schedule,
   }) async {
+    final now = DateTime.now().toUtc();
+    final effectiveScheduledAt = (scheduledAt ?? now).toUtc();
+    final sessionId = _normalizeSessionId(task.sessionId);
     if (_runningTaskIds.contains(task.cronId)) {
       switch (task.concurrency) {
         case CronTaskConcurrencyPolicy.allow:
@@ -131,9 +159,9 @@ class CronModule {
             runId: _nextRunId(),
             cronId: task.cronId,
             trigger: trigger,
-            scheduledAt: scheduledAt ?? DateTime.now(),
-            startedAt: DateTime.now(),
-            finishedAt: DateTime.now(),
+            scheduledAt: effectiveScheduledAt,
+            startedAt: now,
+            finishedAt: now,
             status: CronRunStatus.cancelled,
             error: 'Skipped because task is already running.',
           );
@@ -144,9 +172,9 @@ class CronModule {
             runId: _nextRunId(),
             cronId: task.cronId,
             trigger: trigger,
-            scheduledAt: scheduledAt ?? DateTime.now(),
-            startedAt: DateTime.now(),
-            finishedAt: DateTime.now(),
+            scheduledAt: effectiveScheduledAt,
+            startedAt: now,
+            finishedAt: now,
             status: CronRunStatus.cancelled,
             error: 'Replace policy is not supported yet.',
           );
@@ -155,16 +183,33 @@ class CronModule {
       }
     }
 
+    if (sessionId != null && _runningSessionIds.contains(sessionId)) {
+      final rejected = CronRunRecord(
+        runId: _nextRunId(),
+        cronId: task.cronId,
+        trigger: trigger,
+        scheduledAt: effectiveScheduledAt,
+        startedAt: now,
+        finishedAt: now,
+        status: CronRunStatus.cancelled,
+        error: 'Skipped because session "$sessionId" is already running.',
+      );
+      await _store.putRun(rejected);
+      return rejected;
+    }
+
     _runningTaskIds.add(task.cronId);
-    final now = DateTime.now();
+    if (sessionId != null) {
+      _runningSessionIds.add(sessionId);
+    }
     final baseRun = CronRunRecord(
       runId: _nextRunId(),
       cronId: task.cronId,
       trigger: trigger,
-      scheduledAt: scheduledAt ?? now,
+      scheduledAt: effectiveScheduledAt,
       startedAt: now,
       status: CronRunStatus.running,
-      llmConfig: task.spec.llmConfig,
+      llmConfig: sessionId == null ? task.spec.llmConfig : null,
     );
     await _store.putRun(baseRun);
     print(
@@ -181,24 +226,30 @@ class CronModule {
     );
     final storedMessageKeys = <String>{};
     try {
-      final execution = await _executor.run(
-        task,
-        onMessage: (message) async {
-          final key = _messageStorageKey(message);
-          if (!storedMessageKeys.add(key)) {
-            return;
-          }
-          await _store.putRunMessage(
-            CronRunMessageRecord(
-              messageId: _nextMessageId(),
-              runId: baseRun.runId,
-              cronId: task.cronId,
-              timestamp: message.createTime,
-              message: message,
-            ),
-          );
-        },
-      );
+      CronExecutionResult execution;
+      try {
+        execution = await _executor.run(
+          task,
+          scheduledAt: effectiveScheduledAt,
+          onMessage: (message) async {
+            final key = _messageStorageKey(message);
+            if (!storedMessageKeys.add(key)) {
+              return;
+            }
+            await _store.putRunMessage(
+              CronRunMessageRecord(
+                messageId: _nextMessageId(),
+                runId: baseRun.runId,
+                cronId: task.cronId,
+                timestamp: message.createTime,
+                message: message,
+              ),
+            );
+          },
+        );
+      } catch (error) {
+        execution = CronExecutionResult(error: error.toString());
+      }
       for (final message in execution.messages) {
         final key = _messageStorageKey(message);
         if (!storedMessageKeys.add(key)) {
@@ -215,7 +266,7 @@ class CronModule {
         );
       }
       final finished = baseRun.copyWith(
-        finishedAt: DateTime.now(),
+        finishedAt: DateTime.now().toUtc(),
         status: execution.success
             ? CronRunStatus.succeeded
             : CronRunStatus.failed,
@@ -242,14 +293,25 @@ class CronModule {
           },
         }),
       );
-      final updatedTask = task.copyWith(
+      final latestTask = await _requireTask(task.cronId);
+      final updatedTask = latestTask.copyWith(
         lastRunAt: finished.finishedAt,
-        updatedAt: DateTime.now(),
+        nextRunAt: latestTask.enabled
+            ? _nextRunAt(
+                schedule: latestTask.schedule,
+                timezone: latestTask.timezone,
+                after: finished.finishedAt ?? DateTime.now().toUtc(),
+              )
+            : null,
+        updatedAt: DateTime.now().toUtc(),
       );
       await _store.putTask(updatedTask);
       return finished;
     } finally {
       _runningTaskIds.remove(task.cronId);
+      if (sessionId != null) {
+        _runningSessionIds.remove(sessionId);
+      }
     }
   }
 
@@ -283,7 +345,23 @@ class CronModule {
 
   Future<void> start() async {
     final tasks = await _store.listTasks();
-    await _scheduler.start(tasks);
+    final now = DateTime.now().toUtc();
+    final refreshedTasks = <CronTaskDefinition>[];
+    for (final task in tasks) {
+      final nextRunAt = task.enabled
+          ? _nextRunAt(
+              schedule: task.schedule,
+              timezone: task.timezone,
+              after: now,
+            )
+          : null;
+      final refreshed = task.copyWith(nextRunAt: nextRunAt);
+      if (!_sameInstant(task.nextRunAt, refreshed.nextRunAt)) {
+        await _store.putTask(refreshed);
+      }
+      refreshedTasks.add(refreshed);
+    }
+    await _scheduler.start(refreshedTasks);
   }
 
   Future<void> stop() {
@@ -341,5 +419,29 @@ class CronModule {
       message.content.toString(),
       message.reasoningContent ?? '',
     ].join('|');
+  }
+
+  DateTime? _nextRunAt({
+    required String schedule,
+    required String? timezone,
+    required DateTime after,
+  }) {
+    return CronScheduleCalculator.nextRunAt(
+      schedule: schedule,
+      timezoneName: timezone,
+      after: after,
+    );
+  }
+
+  String? _normalizeSessionId(String? sessionId) {
+    final normalized = sessionId?.trim();
+    if (normalized == null || normalized.isEmpty) {
+      return null;
+    }
+    return normalized;
+  }
+
+  bool _sameInstant(DateTime? first, DateTime? second) {
+    return first?.millisecondsSinceEpoch == second?.millisecondsSinceEpoch;
   }
 }

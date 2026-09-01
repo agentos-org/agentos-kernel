@@ -126,7 +126,6 @@ INSERT INTO cron_tasks (
   name,
   schedule,
   source,
-  user_id,
   session_id,
   timezone,
   concurrency,
@@ -136,12 +135,11 @@ INSERT INTO cron_tasks (
   last_run_at,
   next_run_at,
   status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(cron_id) DO UPDATE SET
   name = excluded.name,
   schedule = excluded.schedule,
   source = excluded.source,
-  user_id = excluded.user_id,
   session_id = excluded.session_id,
   timezone = excluded.timezone,
   concurrency = excluded.concurrency,
@@ -157,7 +155,6 @@ ON CONFLICT(cron_id) DO UPDATE SET
         task.name,
         task.schedule,
         task.source,
-        task.userId,
         task.sessionId,
         task.timezone,
         task.concurrency.name,
@@ -177,7 +174,20 @@ ON CONFLICT(cron_id) DO UPDATE SET
     await _ensureOpen();
     final rows = await _executor.runSelect(
       '''
-SELECT *
+SELECT
+  cron_id,
+  name,
+  schedule,
+  source,
+  session_id,
+  timezone,
+  concurrency,
+  spec_json,
+  created_at,
+  updated_at,
+  last_run_at,
+  next_run_at,
+  status
 FROM cron_tasks
 WHERE cron_id = ?
 LIMIT 1;
@@ -194,7 +204,20 @@ LIMIT 1;
   Future<List<CronTaskDefinition>> listTasks() async {
     await _ensureOpen();
     final rows = await _executor.runSelect('''
-SELECT *
+SELECT
+  cron_id,
+  name,
+  schedule,
+  source,
+  session_id,
+  timezone,
+  concurrency,
+  spec_json,
+  created_at,
+  updated_at,
+  last_run_at,
+  next_run_at,
+  status
 FROM cron_tasks
 ORDER BY created_at ASC;
 ''', const []);
@@ -374,7 +397,6 @@ ORDER BY timestamp ASC;
       name: row['name'] as String? ?? '',
       schedule: row['schedule'] as String? ?? '',
       source: row['source'] as String? ?? '',
-      userId: row['user_id'] as String?,
       sessionId: row['session_id'] as String?,
       timezone: row['timezone'] as String?,
       concurrency: CronTaskConcurrencyPolicy.values.byName(
@@ -439,14 +461,14 @@ ORDER BY timestamp ASC;
   }
 
   DateTime _fromEpoch(int? value) {
-    return DateTime.fromMillisecondsSinceEpoch(value ?? 0);
+    return DateTime.fromMillisecondsSinceEpoch(value ?? 0, isUtc: true);
   }
 
   DateTime? _fromNullableEpoch(int? value) {
     if (value == null) {
       return null;
     }
-    return DateTime.fromMillisecondsSinceEpoch(value);
+    return DateTime.fromMillisecondsSinceEpoch(value, isUtc: true);
   }
 
   Map<String, dynamic>? _decodeJsonMap(String? value) {
@@ -526,7 +548,6 @@ CREATE TABLE IF NOT EXISTS cron_tasks (
   name TEXT NOT NULL,
   schedule TEXT NOT NULL,
   source TEXT NOT NULL,
-  user_id TEXT,
   session_id TEXT,
   timezone TEXT,
   concurrency TEXT NOT NULL,
