@@ -31,8 +31,9 @@ class CronTimeZone {
       return null;
     }
     _ensureInitialized();
+    final lookupName = normalized == 'UTC' ? 'Etc/UTC' : normalized;
     try {
-      return timezone.getLocation(normalized);
+      return timezone.getLocation(lookupName);
     } on Object {
       throw CronTimezoneException(normalized);
     }

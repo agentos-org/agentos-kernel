@@ -30,7 +30,7 @@ void main() {
       );
 
       final db = sqlite3.open(dbPath);
-      addTearDown(db.dispose);
+      addTearDown(db.close);
       final names = db
           .select('''
 SELECT name

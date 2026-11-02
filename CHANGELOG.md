@@ -1,3 +1,10 @@
+## 0.2.1
+
+- Upgrade runtime and development dependencies.
+- Adapt SQLite and LiteAgent code to their current APIs.
+- Preserve the `UTC` timezone alias with timezone 0.11.
+- Require Dart SDK 3.13 or later.
+
 ## 0.2.0
 
 - Remove the unused Cron task `userId` from the kernel model, DTO, service API,

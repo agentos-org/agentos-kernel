@@ -199,7 +199,7 @@ class _RecordingSessionSdk extends LiteAgentSDK {
   }) : super(baseUrl: 'http://127.0.0.1:65535');
 
   @override
-  Future<Session> initSession({Capability? capability, String? agentId}) async {
+  Future<Session> initSession({Capability? capability}) async {
     initSessionCalls += 1;
     return Session(sessionId: initSessionId);
   }

@@ -364,74 +364,71 @@ void main() {
       },
     );
 
-    test(
-      'executor uses daemon call for non-stream functions even from stream callback',
-      () async {
-        final sdk = _StreamFunctionLiteAgentSdk(sessionId: 'stream-session');
-        final daemonClient = _RecordingModeAwareDaemonClient();
-        final executor = AgentCronExecutor(
-          sdk: sdk,
-          llmConfigResolver: () => LLMConfig(
-            baseUrl: 'http://127.0.0.1:9000',
-            apiKey: 'test-key',
-            model: 'qwen-test',
-          ),
-          llmConfigListResolver: () => const <LLMConfig>[],
-          daemonToolCatalogResolver: () async => [
-            CronDaemonToolCatalogItem(
-              toolId: 'tool-a',
-              alias: 'search',
-              status: 'running',
-              spec: OpenTool(
-                opentool: '1.1.0',
-                info: Info(
-                  title: 'Tool A',
-                  description: 'Search tool',
-                  version: '1.0.0',
-                ),
-                functions: [
-                  FunctionModel(
-                    name: 'search_news',
-                    description: 'Search news',
-                    parameters: const [],
-                  ),
-                ],
+    test('executor uses daemon call for non-stream functions even from stream callback', () async {
+      final sdk = _StreamFunctionLiteAgentSdk(sessionId: 'stream-session');
+      final daemonClient = _RecordingModeAwareDaemonClient();
+      final executor = AgentCronExecutor(
+        sdk: sdk,
+        llmConfigResolver: () => LLMConfig(
+          baseUrl: 'http://127.0.0.1:9000',
+          apiKey: 'test-key',
+          model: 'qwen-test',
+        ),
+        llmConfigListResolver: () => const <LLMConfig>[],
+        daemonToolCatalogResolver: () async => [
+          CronDaemonToolCatalogItem(
+            toolId: 'tool-a',
+            alias: 'search',
+            status: 'running',
+            spec: OpenTool(
+              opentool: '1.1.0',
+              info: Info(
+                title: 'Tool A',
+                description: 'Search tool',
+                version: '1.0.0',
               ),
+              functions: [
+                FunctionModel(
+                  name: 'search_news',
+                  description: 'Search news',
+                  parameters: const [],
+                ),
+              ],
             ),
-          ],
-          daemonClientFactory: (host, port) => daemonClient,
-        );
-        final task = CronTaskDefinition(
-          cronId: 'cron-stream',
-          name: 'stream-report',
-          schedule: '*/5 * * * *',
-          source: 'api',
-          concurrency: CronTaskConcurrencyPolicy.skipIfRunning,
-          spec: AgentCronSpec(
-            systemPrompt: 'You are a cron agent.',
-            timeoutSeconds: 1,
-            content: [
-              Content(type: ContentType.text, message: 'Run stream tool.'),
-            ],
           ),
-          createdAt: DateTime(2026, 1, 1),
-          updatedAt: DateTime(2026, 1, 1),
-          status: CronTaskStatus.active,
-        );
+        ],
+        daemonClientFactory: (host, port) => daemonClient,
+      );
+      final task = CronTaskDefinition(
+        cronId: 'cron-stream',
+        name: 'stream-report',
+        schedule: '*/5 * * * *',
+        source: 'api',
+        concurrency: CronTaskConcurrencyPolicy.skipIfRunning,
+        spec: AgentCronSpec(
+          systemPrompt: 'You are a cron agent.',
+          timeoutSeconds: 1,
+          content: [
+            Content(type: ContentType.text, message: 'Run stream tool.'),
+          ],
+        ),
+        createdAt: DateTime(2026, 1, 1),
+        updatedAt: DateTime(2026, 1, 1),
+        status: CronTaskStatus.active,
+      );
 
-        final result = await executor.run(task);
+      final result = await executor.run(task);
 
-        expect(result.success, isTrue);
-        expect(daemonClient.callCount, 1);
-        expect(daemonClient.streamCallCount, 0);
-        expect(sdk.observedEvents, hasLength(1));
-        expect(sdk.observedEvents.single.eventType, ot.EventType.DONE);
-        expect(sdk.observedEvents.single.toolReturn.result, {
-          'status': 'ok',
-          'mode': 'call',
-        });
-      },
-    );
+      expect(result.success, isTrue);
+      expect(daemonClient.callCount, 1);
+      expect(daemonClient.streamCallCount, 0);
+      expect(sdk.observedEvents, hasLength(1));
+      expect(sdk.observedEvents.single.eventType, ot.EventType.DONE);
+      expect(sdk.observedEvents.single.toolReturn.result, {
+        'status': 'ok',
+        'mode': 'call',
+      });
+    });
 
     test(
       'executor falls back to empty daemon catalog when resolver fails',
@@ -530,7 +527,7 @@ class _RecordingLiteAgentSdk extends LiteAgentSDK {
     : super(baseUrl: 'http://127.0.0.1:65535');
 
   @override
-  Future<Session> initSession({Capability? capability, String? agentId}) async {
+  Future<Session> initSession({Capability? capability}) async {
     initSessionCalls += 1;
     lastCapability = capability;
     return Session(sessionId: sessionId);
@@ -587,7 +584,7 @@ class _HistoryLiteAgentSdk extends LiteAgentSDK {
     : super(baseUrl: 'http://127.0.0.1:65535');
 
   @override
-  Future<Session> initSession({Capability? capability, String? agentId}) async {
+  Future<Session> initSession({Capability? capability}) async {
     return Session(sessionId: sessionId);
   }
 
@@ -614,7 +611,7 @@ class _FailingChatLiteAgentSdk extends LiteAgentSDK {
   _FailingChatLiteAgentSdk() : super(baseUrl: 'http://127.0.0.1:65535');
 
   @override
-  Future<Session> initSession({Capability? capability, String? agentId}) async {
+  Future<Session> initSession({Capability? capability}) async {
     return Session(sessionId: 'failed-chat-session');
   }
 
@@ -646,7 +643,7 @@ class _DelayedHistoryLiteAgentSdk extends LiteAgentSDK {
   }) : super(baseUrl: 'http://127.0.0.1:65535');
 
   @override
-  Future<Session> initSession({Capability? capability, String? agentId}) async {
+  Future<Session> initSession({Capability? capability}) async {
     return Session(sessionId: sessionId);
   }
 
@@ -683,7 +680,7 @@ class _StreamFunctionLiteAgentSdk extends LiteAgentSDK {
     : super(baseUrl: 'http://127.0.0.1:65535');
 
   @override
-  Future<Session> initSession({Capability? capability, String? agentId}) async {
+  Future<Session> initSession({Capability? capability}) async {
     return Session(sessionId: sessionId);
   }
 

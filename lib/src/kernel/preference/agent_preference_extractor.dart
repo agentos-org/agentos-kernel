@@ -95,7 +95,7 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
       if (preferences.isEmpty) {
         return const [];
       }
-      return preference.addTexts(
+      return await preference.addTexts(
         userId: record.userId!.trim(),
         texts: preferences,
         updatedAt: record.timestamp,
@@ -161,13 +161,11 @@ class AgentPreferenceExtractor implements PreferenceExtractor {
       'functions': [
         {
           'name': 'generate_preference',
-          'description':
-              'Generate durable preference texts for the user. Call this function directly; do not wrap it in another function.',
+          'description': 'Generate durable preference texts for the user. Call this function directly; do not wrap it in another function.',
           'parameters': [
             {
               'name': 'text',
-              'description':
-                  'Stable preference texts to store. Use an empty array when there are no durable preferences.',
+              'description': 'Stable preference texts to store. Use an empty array when there are no durable preferences.',
               'required': true,
               'schema': {
                 'type': 'array',

@@ -75,7 +75,7 @@ INSERT INTO cron_tasks (
             CronTaskStatus.active.name,
           ],
         );
-        db.dispose();
+        db.close();
 
         final store = DriftCronTaskStore.open(path: dbPath);
         final loaded = await store.getTask('legacy-cron');
@@ -98,7 +98,7 @@ INSERT INTO cron_tasks (
       await store.listTasks();
 
       final db = sqlite3.open(dbPath);
-      addTearDown(db.dispose);
+      addTearDown(db.close);
       final columns = db
           .select('PRAGMA table_info(cron_tasks);')
           .map((row) => row['name'] as String)

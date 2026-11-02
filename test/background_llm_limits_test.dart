@@ -148,7 +148,7 @@ class _RecordingTerminalSdk extends LiteAgentSDK {
   }) : super(baseUrl: 'http://127.0.0.1:65535');
 
   @override
-  Future<Session> initSession({Capability? capability, String? agentId}) async {
+  Future<Session> initSession({Capability? capability}) async {
     initSessionCalls += 1;
     lastCapability = capability;
     return Session(sessionId: 'background-session');
