@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
-import 'package:lite_embeddings_sdk_dart/lite_embeddings_sdk_dart.dart'
-    as embeddings;
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import 'package:opentool_daemon/opentool_daemon_client.dart';
 
@@ -74,16 +72,13 @@ class AdaptiveSupervision implements Supervision {
   Timer? _liteAgentHealthTimer;
   Timer? _openToolHealthTimer;
   Timer? _llmHealthTimer;
-  Timer? _embeddingsHealthTimer;
   LiteAgentSDK? _liteAgentSdk;
   String? _openToolHost;
   int? _openToolPort;
-  String? _embeddingsBaseUrl;
   List<KernelLlmModel> _llmHealthModels = const [];
   bool _liteAgentHealthInFlight = false;
   bool _openToolHealthInFlight = false;
   bool _llmHealthInFlight = false;
-  bool _embeddingsHealthInFlight = false;
   static const Duration _healthInterval = Duration(seconds: 10);
   static const Duration _healthTimeout = Duration(seconds: 3);
 
@@ -233,15 +228,12 @@ class AdaptiveSupervision implements Supervision {
     required LiteAgentSDK liteAgentSdk,
     String? opentoolHost,
     int? opentoolPort,
-    String? embeddingsBaseUrl,
   }) {
     _liteAgentSdk = liteAgentSdk;
     _openToolHost = opentoolHost;
     _openToolPort = opentoolPort;
-    _embeddingsBaseUrl = embeddingsBaseUrl;
     _ensureLiteAgentMonitor();
     _ensureOpenToolMonitor();
-    _ensureEmbeddingsMonitor();
   }
 
   void startLlmHealthMonitoring(List<KernelLlmModel> models) {
@@ -381,17 +373,6 @@ class AdaptiveSupervision implements Supervision {
     unawaited(_checkLlmHealth());
   }
 
-  void _ensureEmbeddingsMonitor() {
-    if (_embeddingsHealthTimer != null) {
-      return;
-    }
-    _embeddingsHealthTimer = Timer.periodic(
-      _healthInterval,
-      (_) => _checkEmbeddingsHealth(),
-    );
-    unawaited(_checkEmbeddingsHealth());
-  }
-
   Future<void> _checkLiteAgentHealth() async {
     if (_liteAgentHealthInFlight) {
       return;
@@ -465,45 +446,6 @@ class AdaptiveSupervision implements Supervision {
       );
     } finally {
       _openToolHealthInFlight = false;
-    }
-  }
-
-  Future<void> _checkEmbeddingsHealth() async {
-    if (_embeddingsHealthInFlight) {
-      return;
-    }
-    final baseUrl = _embeddingsBaseUrl;
-    if (baseUrl == null || baseUrl.trim().isEmpty) {
-      return;
-    }
-    _embeddingsHealthInFlight = true;
-    final id = 'embeddings';
-    try {
-      final client = embeddings.LiteEmbeddingsClient(baseUrl: baseUrl.trim());
-      final version = await client.getVersion();
-      _recordExternalHealth(
-        ExternalServiceHealth(
-          id: id,
-          type: ExternalServiceType.embeddings,
-          available: true,
-          version: version.version,
-          lastSuccessAt: DateTime.now(),
-          endpoint: baseUrl.trim(),
-        ),
-      );
-    } catch (error) {
-      _recordExternalHealth(
-        ExternalServiceHealth(
-          id: id,
-          type: ExternalServiceType.embeddings,
-          available: false,
-          lastFailureAt: DateTime.now(),
-          message: error.toString(),
-          endpoint: baseUrl.trim(),
-        ),
-      );
-    } finally {
-      _embeddingsHealthInFlight = false;
     }
   }
 

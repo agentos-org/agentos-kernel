@@ -118,38 +118,6 @@ class MemorySummarizationTriggerResult {
   });
 }
 
-class MemorySummaryIndexEntry {
-  final String summaryId;
-  final String segmentId;
-  final String contentFingerprint;
-  final DateTime indexedAt;
-
-  const MemorySummaryIndexEntry({
-    required this.summaryId,
-    required this.segmentId,
-    required this.contentFingerprint,
-    required this.indexedAt,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'summaryId': summaryId,
-    'segmentId': segmentId,
-    'contentFingerprint': contentFingerprint,
-    'indexedAt': indexedAt.toIso8601String(),
-  };
-
-  factory MemorySummaryIndexEntry.fromJson(Map<String, dynamic> json) {
-    return MemorySummaryIndexEntry(
-      summaryId: json['summaryId'] as String? ?? '',
-      segmentId: json['segmentId'] as String? ?? '',
-      contentFingerprint: json['contentFingerprint'] as String? ?? '',
-      indexedAt:
-          DateTime.tryParse(json['indexedAt'] as String? ?? '') ??
-          DateTime.now(),
-    );
-  }
-}
-
 List<String> _stringListFromDynamic(Object? value) {
   if (value is! List) {
     return const [];

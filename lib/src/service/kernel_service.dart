@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:lite_embeddings_sdk_dart/lite_embeddings_sdk_dart.dart'
-    as embeddings;
 import 'package:liteagent_sdk_dart/liteagent_sdk_dart.dart';
 import 'package:opentool_daemon/opentool_daemon_client.dart';
 import 'package:opentool_dart/opentool_client.dart';
@@ -23,7 +21,6 @@ import '../kernel/agent/model.dart';
 import '../kernel/logging/logger.dart';
 import '../kernel/memory/drift_memory.dart';
 import '../kernel/memory/memory_pipeline.dart';
-import '../kernel/memory/memory_summary_indexer.dart';
 import '../kernel/memory/memory_summarizer.dart';
 import '../kernel/memory/model.dart';
 import '../kernel/preference/model.dart';
@@ -32,12 +29,6 @@ import '../kernel/preference/preference.dart';
 import '../kernel/preference/preference_extractor.dart';
 import '../kernel/preference/agent_preference_extractor.dart';
 import '../kernel/preference/preference_processor.dart';
-import '../kernel/preference/lite_embeddings_vector_store.dart';
-import '../kernel/preference/vector_store.dart';
-import '../kernel/rag/drift_rag.dart';
-import '../kernel/rag/markdown_segmenter.dart';
-import '../kernel/rag/model.dart';
-import '../kernel/rag/rag.dart';
 import '../kernel/supervision/model.dart';
 import '../kernel/supervision/model_profiler.dart';
 import '../kernel/supervision/supervision.dart';
@@ -51,33 +42,9 @@ class LlmConfigGroup {
   const LlmConfigGroup({required this.models});
 }
 
-class EmbeddingsConfig {
-  final String baseUrl;
-  final String? embeddingModelBaseUrl;
-
-  /// Embeddings/vector store service authentication key.
-  final String? apiKey;
-
-  /// Embedding model inference service authentication key.
-  final String? embeddingModelApiKey;
-
-  final String docsName;
-  final String? model;
-
-  const EmbeddingsConfig({
-    required this.baseUrl,
-    this.embeddingModelBaseUrl,
-    this.apiKey,
-    this.embeddingModelApiKey,
-    required this.docsName,
-    this.model,
-  });
-}
-
 class KernelRuntimeConfig {
   final String? memoryDbPath;
   final String? preferenceDbPath;
-  final String? ragDbPath;
   final String? modelProfilerDbPath;
   final String? cronDbPath;
   final Duration ttftThreshold;
@@ -104,7 +71,6 @@ class KernelRuntimeConfig {
   const KernelRuntimeConfig({
     this.memoryDbPath = '.hive/kernel_memory.sqlite',
     this.preferenceDbPath = '.hive/kernel_preference.sqlite',
-    this.ragDbPath = '.hive/kernel_rag.sqlite',
     this.modelProfilerDbPath = '.hive/kernel_model_profiles.sqlite',
     this.cronDbPath = '.hive/kernel_cron.sqlite',
     this.ttftThreshold = const Duration(milliseconds: 5000),
@@ -132,29 +98,11 @@ class KernelRuntimeConfig {
   });
 }
 
-class RagConfig {
-  final bool enabled;
-  final String docsNamePrefix;
-  final int defaultQueryLimit;
-  final int defaultCandidateLimit;
-  final RagSegmentationConfig segmentation;
-
-  const RagConfig({
-    this.enabled = true,
-    this.docsNamePrefix = 'rag',
-    this.defaultQueryLimit = 5,
-    this.defaultCandidateLimit = 20,
-    this.segmentation = const RagSegmentationConfig(),
-  });
-}
-
 class KernelServiceConfig {
   final LiteAgentSDK liteAgentSdk;
   final List<PresetOpenSpec>? presetOpenSpecList;
   final LlmConfigGroup? llm;
   final List<String>? preferenceSkills;
-  final EmbeddingsConfig embeddings;
-  final RagConfig rag;
   final KernelRuntimeConfig runtime;
 
   const KernelServiceConfig({
@@ -162,8 +110,6 @@ class KernelServiceConfig {
     this.presetOpenSpecList,
     this.llm,
     this.preferenceSkills,
-    required this.embeddings,
-    this.rag = const RagConfig(),
     this.runtime = const KernelRuntimeConfig(),
   });
 }
@@ -174,7 +120,6 @@ class KernelReadiness {
   final bool llmServicesReady;
   final bool liteAgentReady;
   final bool openToolDaemonReady;
-  final bool embeddingsReady;
   final List<String> reasons;
 
   const KernelReadiness({
@@ -183,7 +128,6 @@ class KernelReadiness {
     required this.llmServicesReady,
     required this.liteAgentReady,
     required this.openToolDaemonReady,
-    required this.embeddingsReady,
     required this.reasons,
   });
 }
@@ -222,16 +166,12 @@ class KernelService {
   final OpenToolDaemonRegistry? _openToolDaemonRegistry;
   final KernelLogger? _logger;
   final DriftMemory? _driftMemory;
-  final SwitchableTextQueryVectorStore? _preferenceVectorStore;
   PreferenceProcessor? _preferenceProcessor;
-  MemorySummaryIndexer? _memorySummaryIndexer;
-  ExternalServiceHealthSubscription? _externalHealthSubscription;
   bool _memorySummarizerStarted;
   MemorySummarizer? _memorySummarizer;
   final KernelRuntimeConfig _runtimeConfig;
   String _opentoolDaemonHost;
   int _opentoolDaemonPort;
-  String _embeddingsBaseUrl;
   KernelMode _mode;
   final ModelProfiler? _modelProfiler;
   _OpenToolDaemonPresetSync? _openToolDaemonPresetSync;
@@ -253,16 +193,13 @@ class KernelService {
     OpenToolDaemonRegistry? openToolDaemonRegistry,
     KernelLogger? logger,
     DriftMemory? driftMemory,
-    SwitchableTextQueryVectorStore? preferenceVectorStore,
     bool memorySummarizerStarted = false,
     KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
     String? opentoolDaemonHost,
     int? opentoolDaemonPort,
-    String embeddingsBaseUrl = '',
     ModelProfiler? modelProfiler,
     CronModule? cronModule,
     List<String>? preferenceSkills,
-    MemorySummaryIndexer? memorySummaryIndexer,
     PreferenceProcessor? preferenceProcessor,
   }) {
     return KernelService._internal(
@@ -274,16 +211,13 @@ class KernelService {
       openToolDaemonRegistry: openToolDaemonRegistry,
       logger: logger,
       driftMemory: driftMemory,
-      preferenceVectorStore: preferenceVectorStore,
       memorySummarizerStarted: memorySummarizerStarted,
       runtimeConfig: runtimeConfig,
       opentoolDaemonHost: opentoolDaemonHost,
       opentoolDaemonPort: opentoolDaemonPort,
-      embeddingsBaseUrl: embeddingsBaseUrl,
       modelProfiler: modelProfiler,
       cronModule: cronModule,
       preferenceSkills: preferenceSkills,
-      memorySummaryIndexer: memorySummaryIndexer,
       preferenceProcessor: preferenceProcessor,
     );
   }
@@ -297,18 +231,15 @@ class KernelService {
     OpenToolDaemonRegistry? openToolDaemonRegistry,
     KernelLogger? logger,
     DriftMemory? driftMemory,
-    SwitchableTextQueryVectorStore? preferenceVectorStore,
     bool memorySummarizerStarted = false,
     KernelRuntimeConfig runtimeConfig = const KernelRuntimeConfig(),
     String? opentoolDaemonHost,
     int? opentoolDaemonPort,
-    String embeddingsBaseUrl = '',
     ModelProfiler? modelProfiler,
     CronModule? cronModule,
     CronDaemonOpenSpecProvider? cronDaemonAccess,
     CronLlmConfigAccess? cronLlmConfigAccess,
     List<String>? preferenceSkills,
-    MemorySummaryIndexer? memorySummaryIndexer,
     PreferenceProcessor? preferenceProcessor,
   }) : _llmConfigPool = llmConfigPool,
        _preferenceExtractorSwitch = preferenceExtractorSwitch,
@@ -317,21 +248,18 @@ class KernelService {
        _openToolDaemonRegistry = openToolDaemonRegistry,
        _logger = logger,
        _driftMemory = driftMemory,
-       _preferenceVectorStore = preferenceVectorStore,
        _memorySummarizerStarted = memorySummarizerStarted,
        _runtimeConfig = runtimeConfig,
        _opentoolDaemonHost =
            opentoolDaemonHost ?? runtimeConfig.opentoolDaemonHost,
        _opentoolDaemonPort =
            opentoolDaemonPort ?? runtimeConfig.opentoolDaemonPort,
-       _embeddingsBaseUrl = embeddingsBaseUrl,
        _mode = runtimeConfig.mode,
        _modelProfiler = modelProfiler,
        _cronModule = cronModule,
        _cronDaemonAccess = cronDaemonAccess,
        _cronLlmConfigAccess = cronLlmConfigAccess,
        _preferenceSkills = preferenceSkills,
-       _memorySummaryIndexer = memorySummaryIndexer,
        _preferenceProcessor = preferenceProcessor;
 
   String get defaultUserId => _defaultUserId;
@@ -356,11 +284,6 @@ class KernelService {
     return _createFromConfig(
       KernelServiceConfig(
         liteAgentSdk: LiteAgentSDK(baseUrl: 'http://127.0.0.1:65535'),
-        embeddings: const EmbeddingsConfig(
-          baseUrl: 'http://127.0.0.1:65534',
-          docsName: 'bootstrap',
-        ),
-        rag: const RagConfig(),
         runtime: runtime,
       ),
     );
@@ -387,7 +310,6 @@ class KernelService {
       liteAgentSdk: config.liteAgentSdk,
       opentoolHost: config.runtime.opentoolDaemonHost,
       opentoolPort: config.runtime.opentoolDaemonPort,
-      embeddingsBaseUrl: config.embeddings.baseUrl,
     );
 
     LlmConfigPool? llmConfigPool;
@@ -400,34 +322,6 @@ class KernelService {
       supervision.startLlmHealthMonitoring(llmModels);
     }
 
-    final embeddingsClient = embeddings.LiteEmbeddingsClient(
-      baseUrl: config.embeddings.baseUrl,
-      bearerToken: config.embeddings.apiKey,
-    );
-    TextQueryVectorStore embeddingsVectorStore;
-    embeddings.LLMConfig? embeddingsLlmConfig = _buildEmbeddingsLlmConfig(
-      config.embeddings,
-    );
-    if (embeddingsLlmConfig != null) {
-      try {
-        final embeddingsDocsId = await _ensureDocsId(
-          embeddingsClient,
-          config.embeddings.docsName,
-          embeddingsLlmConfig,
-        );
-        embeddingsVectorStore = LiteEmbeddingsVectorStore(
-          client: embeddingsClient,
-          docsId: embeddingsDocsId,
-          llmConfig: embeddingsLlmConfig,
-        );
-      } catch (_) {
-        embeddingsVectorStore = ThrowingTextQueryVectorStore();
-        embeddingsLlmConfig = null;
-      }
-    } else {
-      embeddingsVectorStore = ThrowingTextQueryVectorStore();
-    }
-
     final memoryDbPath = config.runtime.memoryDbPath;
     final resolvedMemoryDbPath =
         (memoryDbPath == null || memoryDbPath.trim().isEmpty)
@@ -438,10 +332,6 @@ class KernelService {
         (preferenceDbPath == null || preferenceDbPath.trim().isEmpty)
         ? '.hive/kernel_preference.sqlite'
         : preferenceDbPath.trim();
-    final ragDbPath = config.runtime.ragDbPath;
-    final resolvedRagDbPath = (ragDbPath == null || ragDbPath.trim().isEmpty)
-        ? '.hive/kernel_rag.sqlite'
-        : ragDbPath.trim();
     final modelProfilerDbPath = config.runtime.modelProfilerDbPath;
     final resolvedModelProfilerDbPath =
         (modelProfilerDbPath == null || modelProfilerDbPath.trim().isEmpty)
@@ -458,43 +348,9 @@ class KernelService {
 
     final openToolDaemonRegistry = OpenToolDaemonRegistry();
 
-    final vectorStore = SwitchableTextQueryVectorStore(embeddingsVectorStore);
-    final preference = DriftPreference.open(
-      path: resolvedPreferenceDbPath,
-      vectorStore: vectorStore,
-      isIndexingAvailable: () => _isEmbeddingsAvailable(supervision),
-    );
-
+    final preference = DriftPreference.open(path: resolvedPreferenceDbPath);
     final longTermMemory = DriftMemory.open(path: resolvedMemoryDbPath);
-    final ragStore = DriftRag.open(path: resolvedRagDbPath);
-    final rag = Rag(
-      store: ragStore,
-      segmenter: MarkdownSegmenter(config: config.rag.segmentation),
-      logger: logger,
-      docsNamePrefix: config.rag.docsNamePrefix,
-      client: embeddingsLlmConfig == null ? null : embeddingsClient,
-      llmConfig: embeddingsLlmConfig,
-    );
     MemorySummarizer? memorySummarizer;
-    MemorySummaryIndexer? memorySummaryIndexer;
-    if (embeddingsLlmConfig != null) {
-      try {
-        final memorySummaryDocsId = await _ensureDocsId(
-          embeddingsClient,
-          _memorySummaryDocsName(config.embeddings.docsName),
-          embeddingsLlmConfig,
-        );
-        memorySummaryIndexer = MemorySummaryIndexer(
-          memory: longTermMemory,
-          client: embeddingsClient,
-          llmConfig: embeddingsLlmConfig,
-          docsId: memorySummaryDocsId,
-          logger: logger,
-        );
-      } catch (_) {
-        memorySummaryIndexer = null;
-      }
-    }
     final preferenceExtractorSwitch = SwitchablePreferenceExtractor(
       ThrowingPreferenceExtractor(),
     );
@@ -514,13 +370,7 @@ class KernelService {
       preferenceExtractorSwitch.delegate =
           preferenceExtractorDelegate.preferenceExtractor;
     }
-    final memoryPipeline = MemoryPipeline(
-      memory: longTermMemory,
-      logger: logger,
-      isIndexingAvailable: () => _isEmbeddingsAvailable(supervision),
-      summarizer: memorySummarizer,
-      indexer: memorySummaryIndexer,
-    );
+    final memoryPipeline = MemoryPipeline(memory: longTermMemory);
     final kernel = Kernel(
       openToolDaemonRegistry: openToolDaemonRegistry,
       supervision: supervision,
@@ -528,7 +378,6 @@ class KernelService {
       memoryPipeline: memoryPipeline,
       preference: preference,
       preferenceExtractor: preferenceExtractorSwitch,
-      rag: rag,
     );
 
     var memorySummarizerStarted = false;
@@ -609,36 +458,19 @@ class KernelService {
       openToolDaemonRegistry: openToolDaemonRegistry,
       logger: logger,
       driftMemory: longTermMemory,
-      preferenceVectorStore: vectorStore,
       memorySummarizerStarted: memorySummarizerStarted,
       runtimeConfig: config.runtime,
       opentoolDaemonHost: config.runtime.opentoolDaemonHost,
       opentoolDaemonPort: config.runtime.opentoolDaemonPort,
-      embeddingsBaseUrl: config.embeddings.baseUrl,
       modelProfiler: modelProfiler,
       cronModule: cronModule,
       cronDaemonAccess: cronDaemonAccess,
       cronLlmConfigAccess: cronLlmConfigAccess,
       preferenceSkills: config.preferenceSkills,
-      memorySummaryIndexer: memorySummaryIndexer,
       preferenceProcessor: preferenceProcessor,
     );
     service._memorySummarizer = memorySummarizer;
     service._kernel.memoryPipeline.summarizer = memorySummarizer;
-    service._kernel.memoryPipeline.indexer = memorySummaryIndexer;
-    service._externalHealthSubscription?.cancel();
-    service._externalHealthSubscription = service.onExternalServiceHealthChange(
-      (health) {
-        if (health.type != ExternalServiceType.embeddings ||
-            !health.available) {
-          return;
-        }
-        unawaited(service._syncEmbeddingsIndexes());
-      },
-    );
-    if (memorySummaryIndexer != null) {
-      unawaited(service._syncEmbeddingsIndexes());
-    }
     await cronModule.start();
     return service;
   }
@@ -724,256 +556,65 @@ class KernelService {
     }
   }
 
-  Future<RagBaseDto> createRagBase({
-    String? baseId,
-    required String name,
-    Map<String, dynamic>? metadata,
-  }) async {
-    final base = await _kernel.rag.createBase(
-      baseId: baseId,
-      name: name,
-      metadata: metadata,
-    );
-    return _toRagBaseDto(base);
-  }
-
-  Future<RagBaseDto> getRagBase(String baseId) async {
-    return _toRagBaseDto(await _kernel.rag.getBase(baseId));
-  }
-
-  Future<List<RagBaseListItemDto>> listRagBases({
-    int offset = 0,
-    int limit = 50,
-  }) async {
-    final bases = await _kernel.rag.listBases(offset: offset, limit: limit);
-    return bases.map(_toRagBaseListItemDto).toList(growable: false);
-  }
-
-  Future<RagBaseDto> updateRagBase({
-    required String baseId,
-    String? name,
-    Map<String, dynamic>? metadata,
-  }) async {
-    final base = await _kernel.rag.updateBase(
-      baseId: baseId,
-      name: name,
-      metadata: metadata,
-    );
-    return _toRagBaseDto(base);
-  }
-
-  Future<void> deleteRagBase(String baseId) {
-    return _kernel.rag.deleteBase(baseId);
-  }
-
-  Future<RagDocumentDto> upsertRagMarkdownDocument({
-    required String baseId,
-    required String documentId,
-    required String title,
-    required String markdown,
-    Map<String, dynamic>? metadata,
-    bool sync = true,
-  }) async {
-    final document = await _kernel.rag.upsertMarkdownDocument(
-      baseId: baseId,
-      documentId: documentId,
-      title: title,
-      markdown: markdown,
-      metadata: metadata,
-      sync: sync,
-    );
-    return _toRagDocumentDto(document);
-  }
-
-  Future<RagBatchResultDto> upsertRagMarkdownDocuments({
-    required String baseId,
-    required List<RagMarkdownDocumentInputDto> documents,
-    bool sync = true,
-  }) async {
-    final items = <RagBatchItemResultDto>[];
-    for (final document in documents) {
-      try {
-        final result = await upsertRagMarkdownDocument(
-          baseId: baseId,
-          documentId: document.documentId,
-          title: document.title,
-          markdown: document.markdown,
-          metadata: document.metadata,
-          sync: sync,
-        );
-        items.add(
-          RagBatchItemResultDto(
-            baseId: baseId,
-            documentId: result.id,
-            status: RagBatchItemStatus.success.name,
-            syncStatus: result.syncStatus,
-          ),
-        );
-      } catch (error) {
-        items.add(
-          RagBatchItemResultDto(
-            baseId: baseId,
-            documentId: document.documentId,
-            status: RagBatchItemStatus.failed.name,
-            syncStatus: RagDocumentSyncStatus.failed.name,
-            message: error.toString(),
-          ),
-        );
-      }
-    }
-    return _buildRagBatchResultDto(items);
-  }
-
-  Future<RagDocumentDto> getRagDocument({
-    required String baseId,
-    required String documentId,
-  }) async {
-    final document = await _kernel.rag.getDocument(
-      baseId: baseId,
-      documentId: documentId,
-    );
-    return _toRagDocumentDto(document);
-  }
-
-  Future<List<RagDocumentListItemDto>> listRagDocuments({
-    required String baseId,
-    int offset = 0,
-    int limit = 50,
-  }) async {
-    final documents = await _kernel.rag.listDocuments(
-      baseId: baseId,
-      offset: offset,
-      limit: limit,
-    );
-    return documents.map(_toRagDocumentListItemDto).toList(growable: false);
-  }
-
-  Future<void> deleteRagDocument({
-    required String baseId,
-    required String documentId,
-  }) {
-    return _kernel.rag.deleteDocument(baseId: baseId, documentId: documentId);
-  }
-
-  Future<RagDocumentSyncResultDto> syncRagDocument({
-    required String baseId,
-    required String documentId,
-  }) async {
-    final result = await _kernel.rag.syncDocument(
-      baseId: baseId,
-      documentId: documentId,
-    );
-    return _toRagDocumentSyncResultDto(result);
-  }
-
-  Future<RagBatchResultDto> syncRagBase(String baseId) async {
-    return _toRagBatchResultDto(await _kernel.rag.syncBase(baseId));
-  }
-
-  Future<RagBatchResultDto> retryFailedRagDocuments({String? baseId}) async {
-    return _toRagBatchResultDto(
-      await _kernel.rag.retryFailedDocuments(baseId: baseId),
-    );
-  }
-
-  Future<RagQueryResultDto> queryRag({
-    required String baseId,
-    required String query,
-    int limit = 5,
-    int candidateLimit = 20,
-  }) async {
-    final result = await _kernel.rag.query(
-      baseId: baseId,
-      query: query,
-      limit: limit,
-      candidateLimit: candidateLimit,
-    );
-    return _toRagQueryResultDto(result);
-  }
-
   Future<List<MemorySummary>> retrieveRelevantMemorySummaries(
     String instruction, {
     int limit = 6,
     int candidateLimit = 24,
   }) async {
-    final query = instruction.trim();
-    if (query.isEmpty || limit <= 0) {
-      return const [];
-    }
-    if (!_isEmbeddingsAvailable(_kernel.supervision)) {
-      return const [];
-    }
-    final indexer = _memorySummaryIndexer;
-    final driftMemory = _driftMemory;
-    if (indexer == null || driftMemory == null) {
+    final keywords = _keywordTerms(instruction).toSet();
+    if (keywords.isEmpty || limit <= 0 || candidateLimit <= 0) {
       return const [];
     }
 
-    final hits = await indexer.queryHits(query, limit: candidateLimit);
-    if (hits.isEmpty) {
-      return const [];
-    }
-
-    final summaries = await driftMemory.listMemorySummaries(limit: 0);
-    final summariesById = {for (final item in summaries) item.id: item};
+    final summaries = await _kernel.memory.listMemorySummaries(limit: 0);
     final scored = <_ScoredMemorySummary>[];
     final now = DateTime.now();
-    final seenTexts = <String>{};
-
-    for (final hit in hits) {
-      final summary = summariesById[hit.summaryId];
-      if (summary == null) {
+    for (final summary in summaries) {
+      final keywordHits = _countKeywordHits(keywords, summary.text);
+      if (keywordHits == 0) {
         continue;
       }
-      final normalizedText = summary.text.trim().toLowerCase();
-      if (normalizedText.isEmpty || seenTexts.contains(normalizedText)) {
-        continue;
-      }
-      seenTexts.add(normalizedText);
       scored.add(
         _ScoredMemorySummary(
           summary: summary,
-          finalScore: _memorySummaryFinalScore(
-            semanticScore: hit.score,
-            recencyScore: _memorySummaryRecencyScore(summary, now),
-            timeGroupBias: _memorySummaryTimeGroupBias(
-              hit.timeGroup ?? summary.bucket.name,
-            ),
-          ),
-          timeGroup: hit.timeGroup ?? summary.bucket.name,
+          keywordHits: keywordHits,
+          timeScore:
+              _memorySummaryRecencyScore(summary, now) * 0.2 +
+              _memorySummaryTimeGroupBias(summary.bucket.name) * 0.1,
         ),
       );
     }
 
-    scored.sort((a, b) => b.finalScore.compareTo(a.finalScore));
+    scored.sort((a, b) {
+      final byKeywords = b.keywordHits.compareTo(a.keywordHits);
+      if (byKeywords != 0) return byKeywords;
+      final byTimeScore = b.timeScore.compareTo(a.timeScore);
+      if (byTimeScore != 0) return byTimeScore;
+      return b.summary.updatedAt.compareTo(a.summary.updatedAt);
+    });
+    final seenTexts = <String>{};
+    final candidates = scored
+        .map((item) => item.summary)
+        .where((summary) => seenTexts.add(summary.text.trim().toLowerCase()))
+        .take(candidateLimit);
     final selected = <MemorySummary>[];
+    final overflow = <MemorySummary>[];
     final quota = <String, int>{'near': 3, 'mid': 2, 'far': 1};
 
-    for (final item in scored) {
-      if (selected.length >= limit) {
-        break;
-      }
-      final family = _memorySummaryTimeFamily(item.timeGroup);
-      final remaining = quota[family] ?? 0;
-      if (remaining <= 0) {
+    for (final summary in candidates) {
+      final family = _memorySummaryTimeFamily(summary.bucket.name);
+      final remaining = quota[family]!;
+      if (remaining == 0) {
+        overflow.add(summary);
         continue;
       }
       quota[family] = remaining - 1;
-      selected.add(item.summary);
-    }
-
-    if (selected.length < limit) {
-      for (final item in scored) {
-        if (selected.length >= limit) {
-          break;
-        }
-        if (selected.any((summary) => summary.id == item.summary.id)) {
-          continue;
-        }
-        selected.add(item.summary);
+      selected.add(summary);
+      if (selected.length == limit) {
+        break;
       }
     }
-
+    selected.addAll(overflow.take(limit - selected.length));
     return selected;
   }
 
@@ -983,51 +624,40 @@ class KernelService {
     int limit = 3,
     int candidateLimit = 12,
   }) async {
-    final query = instruction.trim();
-    if (query.isEmpty || limit <= 0) {
-      return const [];
-    }
-    if (!_isEmbeddingsAvailable(_kernel.supervision)) {
-      return const [];
-    }
-    final vectorStore = _preferenceVectorStore;
-    if (vectorStore == null) {
-      return const [];
-    }
+    final keywords = _keywordTerms(instruction).toSet();
     final targetUserId = (userId ?? _defaultUserId).trim();
-    final matches = await vectorStore.queryByText(query, limit: candidateLimit);
-    final scored = <_ScoredPreferenceEntry>[];
-    final seenIds = <String>{};
-    final now = DateTime.now();
-    for (final match in matches) {
-      final payload = match.payload;
-      final payloadUserId = payload?['userId'];
-      final id = payload?['id'];
-      final text = payload?['text'];
-      if (payloadUserId != targetUserId || id is! String || text is! String) {
-        continue;
-      }
-      if (!seenIds.add(id)) {
-        continue;
-      }
-      final updatedAt = DateTime.tryParse(
-        payload?['updatedAt'] as String? ?? '',
-      );
-      final entry = PreferenceEntry(
-        id: id,
-        text: text.trim(),
-        updatedAt: updatedAt ?? now,
-      );
-      scored.add(
-        _ScoredPreferenceEntry(
-          entry: entry,
-          finalScore:
-              match.score * 0.8 + _preferenceRecencyScore(entry, now) * 0.2,
-        ),
-      );
+    if (keywords.isEmpty ||
+        targetUserId.isEmpty ||
+        limit <= 0 ||
+        candidateLimit <= 0) {
+      return const [];
     }
-    scored.sort((a, b) => b.finalScore.compareTo(a.finalScore));
-    return scored.take(limit).map((item) => item.entry).toList(growable: false);
+
+    final preferences = await _kernel.preference.listPreferences(
+      userId: targetUserId,
+      limit: 0,
+    );
+    final scored = <_ScoredPreferenceEntry>[];
+    for (final entry in preferences) {
+      final keywordHits = _countKeywordHits(keywords, entry.text);
+      if (keywordHits > 0) {
+        scored.add(
+          _ScoredPreferenceEntry(entry: entry, keywordHits: keywordHits),
+        );
+      }
+    }
+    scored.sort((a, b) {
+      final byKeywords = b.keywordHits.compareTo(a.keywordHits);
+      if (byKeywords != 0) return byKeywords;
+      final byRecency = b.entry.updatedAt.compareTo(a.entry.updatedAt);
+      if (byRecency != 0) return byRecency;
+      return a.entry.id.compareTo(b.entry.id);
+    });
+    return scored
+        .take(candidateLimit)
+        .take(limit)
+        .map((item) => item.entry)
+        .toList(growable: false);
   }
 
   Future<RelevantContext> retrieveRelevantContext(
@@ -1038,14 +668,6 @@ class KernelService {
     int preferenceLimit = 3,
     int preferenceCandidateLimit = 12,
   }) async {
-    final embeddingsAvailable = _isEmbeddingsAvailable(_kernel.supervision);
-    if (!embeddingsAvailable) {
-      return const RelevantContext(
-        embeddingsAvailable: false,
-        memorySummaries: [],
-        preferences: [],
-      );
-    }
     final memorySummaries = await retrieveRelevantMemorySummaries(
       instruction,
       limit: memoryLimit,
@@ -1058,7 +680,6 @@ class KernelService {
       candidateLimit: preferenceCandidateLimit,
     );
     return RelevantContext(
-      embeddingsAvailable: true,
       memorySummaries: memorySummaries,
       preferences: preferences,
     );
@@ -1264,97 +885,6 @@ class KernelService {
     }
   }
 
-  Future<bool> updateEmbeddingsConfig(EmbeddingsConfig config) async {
-    final vectorStore = _preferenceVectorStore;
-    if (vectorStore == null) {
-      throw StateError('Embeddings config is not managed by KernelService.');
-    }
-
-    final embeddingsLlmConfig = _buildEmbeddingsLlmConfig(config);
-    if (embeddingsLlmConfig == null) {
-      vectorStore.delegate = ThrowingTextQueryVectorStore();
-      _memorySummaryIndexer = null;
-      _kernel.memoryPipeline.indexer = null;
-      await _kernel.rag.configureEmbeddings(client: null, llmConfig: null);
-      return false;
-    }
-
-    final embeddingsClient = embeddings.LiteEmbeddingsClient(
-      baseUrl: config.baseUrl,
-      bearerToken: config.apiKey,
-    );
-
-    _logger?.warn(
-      'KernelService updateEmbeddingsConfig: '
-      'baseUrl=${config.baseUrl}, '
-      'embeddingModelBaseUrl=${config.embeddingModelBaseUrl}, '
-      'docsName=${config.docsName}, '
-      'model=${config.model}',
-    );
-
-    try {
-      final docsId = await _ensureDocsId(
-        embeddingsClient,
-        _preferenceDocsName(config.docsName),
-        embeddingsLlmConfig,
-      );
-      vectorStore.delegate = LiteEmbeddingsVectorStore(
-        client: embeddingsClient,
-        docsId: docsId,
-        llmConfig: embeddingsLlmConfig,
-      );
-      final driftMemory = _driftMemory;
-      if (driftMemory != null) {
-        final memorySummaryDocsId = await _ensureDocsId(
-          embeddingsClient,
-          _memorySummaryDocsName(config.docsName),
-          embeddingsLlmConfig,
-        );
-        _memorySummaryIndexer = MemorySummaryIndexer(
-          memory: driftMemory,
-          client: embeddingsClient,
-          llmConfig: embeddingsLlmConfig,
-          docsId: memorySummaryDocsId,
-          logger: _logger,
-        );
-        _kernel.memoryPipeline.indexer = _memorySummaryIndexer;
-        await _syncEmbeddingsIndexes();
-      }
-      await _kernel.rag.configureEmbeddings(
-        client: embeddingsClient,
-        llmConfig: embeddingsLlmConfig,
-      );
-      _restartEmbeddingsHealthMonitoring(config.baseUrl);
-      _logger?.warn(
-        'KernelService updateEmbeddingsConfig: configured successfully '
-        'docsName=${config.docsName} model=${config.model}',
-      );
-      return true;
-    } catch (error, stackTrace) {
-      _logger?.warn(
-        'KernelService updateEmbeddingsConfig failed.',
-        data: {
-          'error': error.toString(),
-          'stackTrace': stackTrace.toString(),
-          'baseUrl': config.baseUrl,
-          'embeddingModelBaseUrl': config.embeddingModelBaseUrl,
-          'docsName': config.docsName,
-          'model': config.model,
-        },
-      );
-      vectorStore.delegate = ThrowingTextQueryVectorStore();
-      _memorySummaryIndexer = null;
-      _kernel.memoryPipeline.indexer = null;
-      await _kernel.rag.configureEmbeddings(client: null, llmConfig: null);
-      return false;
-    }
-  }
-
-  void _restartEmbeddingsHealthMonitoring(String baseUrl) {
-    _embeddingsBaseUrl = baseUrl;
-    _restartExternalServiceMonitoring();
-  }
-
   void _restartExternalServiceMonitoring() {
     final supervision = _kernel.supervision;
     final liteAgentClient = _liteAgentClient;
@@ -1365,7 +895,6 @@ class KernelService {
       liteAgentSdk: liteAgentClient.sdk,
       opentoolHost: _opentoolDaemonHost,
       opentoolPort: _opentoolDaemonPort,
-      embeddingsBaseUrl: _embeddingsBaseUrl,
     );
   }
 
@@ -1442,7 +971,6 @@ class KernelService {
     bool requireLlm = true,
     bool requireLiteAgent = true,
     bool requireOpenToolDaemon = false,
-    bool requireEmbeddings = false,
   }) {
     final reasons = <String>[];
     final llmConfigured = _llmConfigPool?.configs.isNotEmpty ?? false;
@@ -1456,11 +984,6 @@ class KernelService {
       health,
       ExternalServiceType.opentoolDaemon,
     );
-    final embeddingsReady = _hasHealthyExternalService(
-      health,
-      ExternalServiceType.embeddings,
-    );
-
     if (requireLlm && !llmConfigured) {
       reasons.add('LLM models are not configured.');
     }
@@ -1473,17 +996,12 @@ class KernelService {
     if (requireOpenToolDaemon && !openToolDaemonReady) {
       reasons.add('OpenTool daemon is not healthy yet.');
     }
-    if (requireEmbeddings && !embeddingsReady) {
-      reasons.add('Embeddings service is not healthy yet.');
-    }
-
     return KernelReadiness(
       ready: reasons.isEmpty,
       llmConfigured: llmConfigured,
       llmServicesReady: llmServicesReady,
       liteAgentReady: liteAgentReady,
       openToolDaemonReady: openToolDaemonReady,
-      embeddingsReady: embeddingsReady,
       reasons: reasons,
     );
   }
@@ -1492,13 +1010,11 @@ class KernelService {
     bool requireLlm = true,
     bool requireLiteAgent = true,
     bool requireOpenToolDaemon = false,
-    bool requireEmbeddings = false,
   }) {
     final readiness = getReadiness(
       requireLlm: requireLlm,
       requireLiteAgent: requireLiteAgent,
       requireOpenToolDaemon: requireOpenToolDaemon,
-      requireEmbeddings: requireEmbeddings,
     );
     return readiness.ready;
   }
@@ -1842,31 +1358,6 @@ class KernelService {
     return maxConcurrency > 0 && snapshot.inFlight < maxConcurrency;
   }
 
-  Future<void> _syncMemorySummaryIndex({List<MemorySummary>? summaries}) async {
-    await _kernel.memoryPipeline.syncIndexIfAvailable(summaries: summaries);
-  }
-
-  Future<void> _syncPreferenceIndex() async {
-    if (!_isEmbeddingsAvailable(_kernel.supervision)) {
-      return;
-    }
-    final preference = _kernel.preference;
-    try {
-      await preference.syncIndexes(userId: _defaultUserId);
-    } catch (error) {
-      _logger?.warn(
-        'Failed to sync preference embeddings index.',
-        data: {'error': error.toString()},
-      );
-    }
-  }
-
-  Future<void> _syncEmbeddingsIndexes() async {
-    await _syncMemorySummaryIndex();
-    await _syncPreferenceIndex();
-    await _kernel.rag.syncAllDocuments();
-  }
-
   OpenToolDaemonRegistry _resolveOpenToolDaemonRegistry() {
     return _kernel.openToolDaemonRegistry;
   }
@@ -1999,30 +1490,6 @@ class KernelService {
   }
 }
 
-String _memorySummaryDocsName(String docsName) {
-  final normalized = docsName.trim();
-  if (normalized.isEmpty) {
-    return 'memory_summaries';
-  }
-  return '${normalized}_memory_summaries';
-}
-
-String _preferenceDocsName(String docsName) {
-  final normalized = docsName.trim();
-  if (normalized.isEmpty) {
-    return 'preferences';
-  }
-  return '${normalized}_preferences';
-}
-
-double _memorySummaryFinalScore({
-  required double semanticScore,
-  required double recencyScore,
-  required double timeGroupBias,
-}) {
-  return semanticScore * 0.7 + recencyScore * 0.2 + timeGroupBias * 0.1;
-}
-
 double _memorySummaryRecencyScore(MemorySummary summary, DateTime now) {
   final age = now.difference(summary.updatedAt);
   if (age.inHours <= 6) {
@@ -2078,21 +1545,6 @@ String _memorySummaryTimeFamily(String timeGroup) {
   }
 }
 
-embeddings.LLMConfig? _buildEmbeddingsLlmConfig(EmbeddingsConfig config) {
-  final model = config.model?.trim();
-  if (model == null || model.isEmpty) {
-    return null;
-  }
-  final embeddingModelBaseUrl = config.embeddingModelBaseUrl?.trim();
-  return embeddings.LLMConfig(
-    baseUrl: embeddingModelBaseUrl != null && embeddingModelBaseUrl.isNotEmpty
-        ? embeddingModelBaseUrl
-        : config.baseUrl,
-    apiKey: config.embeddingModelApiKey ?? config.apiKey ?? '',
-    model: model,
-  );
-}
-
 bool _isModelAvailable(Supervision supervision, LLMConfig config) {
   if (supervision is AdaptiveSupervision) {
     final snapshot = supervision.modelHealthSnapshot();
@@ -2105,45 +1557,6 @@ bool _isModelAvailable(Supervision supervision, LLMConfig config) {
     return health?.available ?? true;
   }
   return true;
-}
-
-bool _isEmbeddingsAvailable(Supervision supervision) {
-  if (supervision is AdaptiveSupervision) {
-    final snapshot = supervision.externalServiceHealthSnapshot();
-    for (final item in snapshot.items.values) {
-      if (item.type == ExternalServiceType.embeddings) {
-        return item.available;
-      }
-    }
-    return false;
-  }
-  return true;
-}
-
-Future<String> _ensureDocsId(
-  embeddings.LiteEmbeddingsClient client,
-  String docsName,
-  embeddings.LLMConfig llmConfig,
-) async {
-  final docsList = await client.listDocs();
-  for (final docs in docsList) {
-    if (docs.docsName == docsName) {
-      return docs.docsId;
-    }
-  }
-  final created = await client.createDocs(
-    embeddings.CreateDocsRequest(
-      docsName: docsName,
-      segmentList: [
-        embeddings.Segment(
-          text: 'bootstrap',
-          metadata: const {'bootstrap': true},
-        ),
-      ],
-      llmConfig: llmConfig,
-    ),
-  );
-  return created.docsId;
 }
 
 class _OpenToolDaemonPresetSync {
@@ -2401,40 +1814,63 @@ class _OpenToolDaemonPresetSync {
   String _directoryToolId(String toolId) => 'daemon:$toolId';
 }
 
+final _keywordPattern = RegExp(
+  r'(\p{Script=Han}+)|(?:(?!\p{Script=Han})[\p{L}\p{M}\p{N}])+',
+  unicode: true,
+);
+
+Iterable<String> _keywordTerms(
+  String text, {
+  bool includeHanCharacters = false,
+}) sync* {
+  for (final match in _keywordPattern.allMatches(text.toLowerCase())) {
+    final han = match.group(1);
+    if (han == null) {
+      yield match.group(0)!;
+      continue;
+    }
+    // Han text often has no word separators. Match adjacent character pairs
+    // and allow an isolated query character to match within a longer run.
+    final characters = han.runes.toList(growable: false);
+    for (var i = 0; i < characters.length; i += 1) {
+      if (includeHanCharacters || characters.length == 1) {
+        yield String.fromCharCode(characters[i]);
+      }
+      if (i + 1 < characters.length) {
+        yield String.fromCharCodes(characters, i, i + 2);
+      }
+    }
+  }
+}
+
+int _countKeywordHits(Set<String> keywords, String text) {
+  final matched = _keywordTerms(
+    text,
+    includeHanCharacters: true,
+  ).where(keywords.contains).toSet();
+  return matched.length;
+}
+
 class _ScoredMemorySummary {
   final MemorySummary summary;
-  final double finalScore;
-  final String timeGroup;
+  final int keywordHits;
+  final double timeScore;
 
   const _ScoredMemorySummary({
     required this.summary,
-    required this.finalScore,
-    required this.timeGroup,
+    required this.keywordHits,
+    required this.timeScore,
   });
 }
 
 class _ScoredPreferenceEntry {
   final PreferenceEntry entry;
-  final double finalScore;
+  final int keywordHits;
 
-  const _ScoredPreferenceEntry({required this.entry, required this.finalScore});
-}
-
-double _preferenceRecencyScore(PreferenceEntry entry, DateTime now) {
-  final age = now.difference(entry.updatedAt);
-  if (age.inHours <= 6) {
-    return 1.0;
-  }
-  if (age.inDays <= 1) {
-    return 0.9;
-  }
-  if (age.inDays <= 7) {
-    return 0.75;
-  }
-  if (age.inDays <= 30) {
-    return 0.6;
-  }
-  return 0.4;
+  const _ScoredPreferenceEntry({
+    required this.entry,
+    required this.keywordHits,
+  });
 }
 
 class _DaemonActiveTool {
@@ -2520,131 +1956,4 @@ class _DaemonToolLifecycleEventType {
 
 class _DaemonToolStatusType {
   static const String running = 'running';
-}
-
-RagBaseDto _toRagBaseDto(RagBase base) {
-  return RagBaseDto(
-    id: base.id,
-    name: base.name,
-    docsName: base.docsName,
-    docsId: base.docsId,
-    metadata: base.metadata,
-    createdAt: base.createdAt,
-    updatedAt: base.updatedAt,
-  );
-}
-
-RagBaseListItemDto _toRagBaseListItemDto(RagBase base) {
-  return RagBaseListItemDto(
-    id: base.id,
-    name: base.name,
-    createdAt: base.createdAt,
-    updatedAt: base.updatedAt,
-  );
-}
-
-RagDocumentDto _toRagDocumentDto(RagDocument document) {
-  return RagDocumentDto(
-    id: document.id,
-    baseId: document.baseId,
-    title: document.title,
-    markdown: document.markdown,
-    contentHash: document.contentHash,
-    metadata: document.metadata,
-    createdAt: document.createdAt,
-    updatedAt: document.updatedAt,
-    indexedAt: document.indexedAt,
-    syncStatus: document.syncStatus.name,
-  );
-}
-
-RagDocumentListItemDto _toRagDocumentListItemDto(RagDocument document) {
-  return RagDocumentListItemDto(
-    id: document.id,
-    baseId: document.baseId,
-    title: document.title,
-    updatedAt: document.updatedAt,
-    indexedAt: document.indexedAt,
-    syncStatus: document.syncStatus.name,
-  );
-}
-
-RagDocumentSyncResultDto _toRagDocumentSyncResultDto(
-  RagDocumentSyncResult result,
-) {
-  return RagDocumentSyncResultDto(
-    baseId: result.baseId,
-    documentId: result.documentId,
-    syncStatus: result.syncStatus.name,
-    keptCount: result.keptCount,
-    updatedCount: result.updatedCount,
-    insertedCount: result.insertedCount,
-    deletedCount: result.deletedCount,
-    syncedAt: result.syncedAt,
-  );
-}
-
-RagBatchResultDto _toRagBatchResultDto(RagBatchResult result) {
-  return RagBatchResultDto(
-    totalCount: result.totalCount,
-    successCount: result.successCount,
-    failedCount: result.failedCount,
-    skippedCount: result.skippedCount,
-    processedAt: result.processedAt,
-    items: result.items
-        .map(
-          (item) => RagBatchItemResultDto(
-            baseId: item.baseId,
-            documentId: item.documentId,
-            status: item.status.name,
-            syncStatus: item.syncStatus.name,
-            message: item.message,
-          ),
-        )
-        .toList(growable: false),
-  );
-}
-
-RagBatchResultDto _buildRagBatchResultDto(List<RagBatchItemResultDto> items) {
-  return RagBatchResultDto(
-    totalCount: items.length,
-    successCount: items
-        .where((item) => item.status == RagBatchItemStatus.success.name)
-        .length,
-    failedCount: items
-        .where((item) => item.status == RagBatchItemStatus.failed.name)
-        .length,
-    skippedCount: items
-        .where((item) => item.status == RagBatchItemStatus.skipped.name)
-        .length,
-    processedAt: DateTime.now(),
-    items: items,
-  );
-}
-
-RagQueryResultDto _toRagQueryResultDto(RagQueryResult result) {
-  return RagQueryResultDto(
-    baseId: result.baseId,
-    query: result.query,
-    hits: result.hits
-        .map(
-          (hit) => RagDocumentHitDto(
-            documentId: hit.documentId,
-            title: hit.title,
-            score: hit.score,
-            snippet: hit.snippet,
-            segments: hit.segments
-                .map(
-                  (segment) => RagSegmentHitDto(
-                    segmentId: segment.segmentId,
-                    score: segment.score,
-                    text: segment.text,
-                    headingPath: segment.headingPath,
-                  ),
-                )
-                .toList(growable: false),
-          ),
-        )
-        .toList(growable: false),
-  );
 }

@@ -203,39 +203,6 @@ LIMIT 1;
     return paged.take(limit).toList(growable: false);
   }
 
-  Future<List<MemorySummaryIndexEntry>> getMemorySummaryIndexEntries() async {
-    final payload = await _loadPipelineState('memory_summary_index_entries');
-    if (payload == null) {
-      return const [];
-    }
-    final items = payload['items'];
-    if (items is! List) {
-      return const [];
-    }
-    return items
-        .whereType<Map>()
-        .map(
-          (item) => MemorySummaryIndexEntry.fromJson(
-            Map<String, dynamic>.from(item.cast<String, dynamic>()),
-          ),
-        )
-        .where(
-          (entry) =>
-              entry.summaryId.isNotEmpty &&
-              entry.segmentId.isNotEmpty &&
-              entry.contentFingerprint.isNotEmpty,
-        )
-        .toList(growable: false);
-  }
-
-  Future<void> saveMemorySummaryIndexEntries(
-    List<MemorySummaryIndexEntry> entries,
-  ) {
-    return _savePipelineState('memory_summary_index_entries', {
-      'items': entries.map((entry) => entry.toJson()).toList(),
-    });
-  }
-
   Future<void> deleteMemoryItem(String id) async {
     await _ensureOpen();
     await _executor.runCustom('DELETE FROM memory_items WHERE id = ?;', [id]);

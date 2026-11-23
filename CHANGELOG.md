@@ -1,3 +1,13 @@
+## 0.3.0
+
+- **Breaking:** Remove document RAG APIs, `EmbeddingsConfig`,
+  `updateEmbeddingsConfig`, and embedding health and readiness fields.
+- Retrieve memory summaries and user preferences from SQLite using keyword
+  matching through the existing `retrieveRelevant*` methods.
+- **Breaking:** Read `memorySummaries` and `preferences` directly from
+  `RelevantContext`. The `embeddingsAvailable` field has been removed.
+- Existing memory and preference SQLite databases remain compatible.
+
 ## 0.2.1
 
 - Upgrade runtime and development dependencies.

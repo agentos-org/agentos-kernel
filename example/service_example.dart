@@ -8,10 +8,6 @@ Future<void> main() async {
   final liteAgentBaseUrl = '<LITEAGENT_BASE_URL>';
   final liteAgentApiKey = '<LITEAGENT_API_KEY>'; // optional
   final liteAgentModel = '<LITEAGENT_MODEL>';
-  final embeddingsBaseUrl = '<LITE_EMBEDDINGS_BASE_URL>';
-  final embeddingsApiKey = '<LITE_EMBEDDINGS_API_KEY>'; // optional
-  final embeddingsDocsName = '<LITE_EMBEDDINGS_DOCS_NAME>';
-  final embeddingsModel = '<EMBEDDINGS_MODEL>'; // optional
   final opentoolDaemonHost = '<OPENTOOL_DAEMON_HOST>';
   final opentoolDaemonApiKey = '<OPENTOOL_DAEMON_API_KEY>';
   const opentoolDaemonPort = 8080;
@@ -74,24 +70,6 @@ Future<void> main() async {
     _printReadiness(service, 'after llm services');
   }
 
-  if (_isConfigured(embeddingsBaseUrl) && _isConfigured(embeddingsDocsName)) {
-    final ok = await service.updateEmbeddingsConfig(
-      EmbeddingsConfig(
-        baseUrl: embeddingsBaseUrl,
-        apiKey: _optionalValue(embeddingsApiKey),
-        docsName: embeddingsDocsName,
-        model: _optionalValue(embeddingsModel),
-      ),
-    );
-    print('Phase 5: embeddings updated: $ok');
-    _printReadiness(
-      service,
-      'after embeddings',
-      requireEmbeddings: true,
-      requireOpenToolDaemon: true,
-    );
-  }
-
   healthSubscription.cancel();
 }
 
@@ -108,16 +86,8 @@ String? _optionalValue(String value) {
   return value;
 }
 
-void _printReadiness(
-  KernelService service,
-  String phase, {
-  bool requireEmbeddings = false,
-  bool requireOpenToolDaemon = false,
-}) {
-  final readiness = service.getReadiness(
-    requireEmbeddings: requireEmbeddings,
-    requireOpenToolDaemon: requireOpenToolDaemon,
-  );
+void _printReadiness(KernelService service, String phase) {
+  final readiness = service.getReadiness();
   print('[readiness][$phase] ready=${readiness.ready}');
   if (!readiness.ready) {
     print('[readiness][$phase] reasons=${readiness.reasons.join(' | ')}');

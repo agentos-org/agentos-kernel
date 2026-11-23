@@ -16,8 +16,6 @@ abstract class Preference {
   Future<void> deletePreference(String id, {String? userId});
 
   Future<void> clear({String? userId});
-
-  Future<void> syncIndexes({String? userId});
 }
 
 class InMemoryPreference implements Preference {
@@ -110,7 +108,4 @@ class InMemoryPreference implements Preference {
     }
     _preferences.remove(userId.trim());
   }
-
-  @override
-  Future<void> syncIndexes({String? userId}) async {}
 }

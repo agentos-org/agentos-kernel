@@ -1,24 +1,13 @@
-import '../logging/logger.dart';
 import 'drift_memory.dart';
-import 'memory_summary_indexer.dart';
 import 'memory_summarizer.dart';
 import 'model.dart';
 
 class MemoryPipeline {
   final DriftMemory memory;
-  final KernelLogger? logger;
-  final bool Function()? isIndexingAvailable;
 
   MemorySummarizer? summarizer;
-  MemorySummaryIndexer? indexer;
 
-  MemoryPipeline({
-    required this.memory,
-    this.logger,
-    this.isIndexingAvailable,
-    this.summarizer,
-    this.indexer,
-  });
+  MemoryPipeline({required this.memory, this.summarizer});
 
   bool get summarizerAvailable => summarizer != null;
 
@@ -63,7 +52,6 @@ class MemoryPipeline {
       );
     }
     final summaries = await activeSummarizer.summarize(fullScan: true);
-    await syncIndexIfAvailable(summaries: summaries);
     return MemorySummarizationTriggerResult(
       summaries: summaries,
       memoryItemCount: items.length,
@@ -73,21 +61,6 @@ class MemoryPipeline {
           : MemorySummarizationTriggerResult.reasonGenerated,
       bucketCounts: bucketCounts,
     );
-  }
-
-  Future<void> syncIndexIfAvailable({List<MemorySummary>? summaries}) async {
-    final activeIndexer = indexer;
-    if (activeIndexer == null || !(isIndexingAvailable?.call() ?? true)) {
-      return;
-    }
-    try {
-      await activeIndexer.sync(summaries: summaries);
-    } catch (error) {
-      logger?.warn(
-        'Failed to sync memory summary embeddings index.',
-        data: {'error': error.toString()},
-      );
-    }
   }
 
   Map<String, int> _buildBucketCounts(

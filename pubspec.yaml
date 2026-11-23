@@ -1,6 +1,6 @@
 name: agentos_kernel
-description: Kernel modules for agent orchestration and memory.
-version: 0.2.1
+description: Dart kernel for agent orchestration, scheduled LiteAgent jobs, and local memory and preference retrieval.
+version: 0.3.0
 repository: https://github.com/agentos-org/agentos-kernel
 
 environment:
@@ -14,7 +14,6 @@ dependencies:
   sqlite3: ^3.8.0
   timezone: ^0.11.2
   dart_openai_sdk: ^6.2.0
-  lite_embeddings_sdk_dart: ^0.1.0
   liteagent_sdk_dart: ^0.4.1
   opentool_dart: ^3.0.0
   opentool_daemon: ^0.5.3

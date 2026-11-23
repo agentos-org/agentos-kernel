@@ -44,12 +44,10 @@ class DaemonToolSyncSnapshot {
 }
 
 class RelevantContext {
-  final bool embeddingsAvailable;
   final List<MemorySummary> memorySummaries;
   final List<PreferenceEntry> preferences;
 
   const RelevantContext({
-    required this.embeddingsAvailable,
     required this.memorySummaries,
     required this.preferences,
   });

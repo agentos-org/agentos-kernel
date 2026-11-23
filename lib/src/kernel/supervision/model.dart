@@ -10,7 +10,7 @@ class SupervisionAdvice {
   });
 }
 
-enum ExternalServiceType { llm, liteagent, opentoolDaemon, embeddings }
+enum ExternalServiceType { llm, liteagent, opentoolDaemon }
 
 class ExternalServiceHealth {
   final String id;
